@@ -1,0 +1,493 @@
+#ifndef STL_FORWARD_LIST_H
+#define STL_FORWARD_LIST_H
+
+#include <memory>
+#include <functional>
+#include <cmath>
+#include <iterator>
+#include <iostream>
+
+namespace std {
+
+//implemented as a single node list with m_head as a dataless node
+
+template <class T, class Allocator = allocator<T> >
+class forward_list {
+
+private:
+    class Node_base {
+      public:
+        Node_base* m_next;
+    };
+    
+    class Node : public Node_base {
+      public:
+        template <class... Args>
+        Node(Node_base* next, Args&&... args) : Node_base{next}, m_value(std::forward<Args>(args)...) {}
+        T m_value;
+    };
+    
+    typedef typename Allocator::template rebind<Node>::other Node_allocator_type;
+    
+    Node_allocator_type m_alloc;
+    Node_base m_head;
+
+    template <class U> //U is either T or const T depending on if this is a non-const or const iterator
+    class forward_list_iterator : public std::iterator<std::forward_iterator_tag, U> {
+        public:
+            typedef size_t size_type;
+            typedef ptrdiff_t difference_type;
+        
+            forward_list_iterator() = default;
+            forward_list_iterator(const forward_list_iterator<T>& x) : m_node(x.m_node) {}
+            forward_list_iterator(forward_list_iterator<T>&& x) : m_node(std::move(x.m_node)) {}
+            forward_list_iterator<U>& operator= (const forward_list_iterator<T>& x) { m_node = x.m_node; return *this; }
+        
+        private:
+            friend forward_list;
+            explicit forward_list_iterator(const Node_base* node) : m_node(const_cast<Node_base*>(node)) {} //I do feel a little dirty,
+                //but formally promise not to change the el I'm pointing to if iterator is const
+            Node_base* m_node;
+            
+        public:
+            bool operator==(const forward_list_iterator<T>& other) const {
+                return m_node == other.m_node;
+            }
+            bool operator==(const forward_list_iterator<const T>& other) const {
+                return m_node == other.m_node;
+            }
+            bool operator!=(const forward_list_iterator<T>& other) const {
+                return !(*this == other);
+            }
+            bool operator!=(const forward_list_iterator<const T>& other) const {
+                return !(*this == other);
+            }
+            forward_list_iterator<U>& operator++() {
+                m_node = m_node->m_next;
+                return *this;
+            }
+            forward_list_iterator<U> operator++(int) {
+                forward_list_iterator<U> current(*this);
+                m_node = m_node->m_next;
+                return current;
+            }
+            U& operator* () const { return static_cast<Node*>(m_node)->m_value; }
+            U* operator-> () const { return &static_cast<Node*>(m_node)->m_value; }
+    };
+
+public:
+    // types:
+    typedef T value_type;
+    typedef value_type& reference;
+    typedef const value_type& const_reference;
+    typedef forward_list_iterator<T> iterator; // See 23.2
+    typedef forward_list_iterator<const T> const_iterator; // See 23.2
+    typedef typename forward_list_iterator<T>::size_type size_type; // See 23.2
+    typedef typename forward_list_iterator<T>::difference_type difference_type; // See 23.2
+    typedef Allocator allocator_type;
+    typedef typename allocator_traits<Allocator>::pointer pointer;
+    typedef typename allocator_traits<Allocator>::const_pointer const_pointer;
+
+// 23.3.4.2, construct/copy/destroy:
+    explicit forward_list(const Allocator& alloc = Allocator()) : m_alloc(alloc), m_head{nullptr} {}
+    
+    explicit forward_list(size_type n) : forward_list(Allocator()) {
+        for (size_type i = 0; i < n; ++i) 
+            emplace_front();
+    }
+    
+    forward_list(size_type n, const T& value, const Allocator& alloc = Allocator()) : forward_list(alloc) {
+        for (size_type i = 0; i < n; ++i) 
+            emplace_front(value);
+    }
+    
+    template <class InputIterator>
+    forward_list(InputIterator first, InputIterator last, const Allocator& alloc = Allocator()) : forward_list(alloc) {
+        iterator current = before_begin();
+        for (auto it = first; it != last; ++it)
+            current = emplace_after(current, *it);
+    }
+    
+    forward_list(const forward_list& x, const Allocator& alloc) : forward_list(x.begin(), x.end(), alloc) {}
+    forward_list(const forward_list& x) : forward_list(x, Allocator()) {}    
+    forward_list(forward_list&& x, const Allocator& alloc) : m_alloc(alloc), m_head(x.m_head) { x.m_head.m_next = nullptr; } 
+    forward_list(forward_list&& x) : forward_list(std::forward(x), Allocator()) {} 
+    forward_list(initializer_list<T> x, const Allocator& alloc = Allocator()) : forward_list(x.begin(), x.end(), alloc) {}
+    ~forward_list() { clear(); }
+
+    template <class InputIterator>
+    void assign(InputIterator first, InputIterator last) {
+        auto before_dest = before_begin(), dest = begin();
+        while (first != last && dest != end()) { //copy
+            *dest++ = *first++;
+            ++before_dest;
+        }
+        while (first != last) //append
+            before_dest = emplace_after(before_dest, *first++);
+        erase_after(before_dest, end()); //erase trailing data
+    }
+
+    void assign(size_type n, const T& t) {
+        auto before_dest = before_begin(), dest = begin();
+        size_type i; 
+        for (i = 0; dest != end() && i < n; ++i) { //copy
+            *dest++ = t;
+            ++before_dest;
+        }
+        for (; i < n; ++i) //append
+            before_dest = emplace_after(before_dest, t);
+        erase_after(before_dest, end()); //erase trailing data
+    }
+
+    void assign(initializer_list<T> x) { assign(x.begin(), x.end()); }
+    
+    forward_list<T,Allocator>& operator=(const forward_list<T,Allocator>& x) { 
+        assign(x.begin(), x.end()); 
+        return *this;
+    }
+    
+    forward_list& operator=(initializer_list<T> x) { 
+        assign(x.begin(), x.end()); 
+        return *this;
+    }
+    
+    forward_list<T,Allocator>& operator=(forward_list<T,Allocator>&& x) {
+        clear();
+        m_head = x.m_head; 
+        x.m_head.m_next = nullptr;
+        return *this;
+    }
+    
+    allocator_type get_allocator() const noexcept { return m_alloc; }
+
+// 23.3.4.3, iterators:
+    iterator before_begin() noexcept { return iterator(&m_head); }
+    const_iterator before_begin() const noexcept { return const_iterator(&m_head); }
+    iterator begin() noexcept { return iterator(m_head.m_next); }
+    const_iterator begin() const noexcept { return const_iterator(m_head.m_next); }
+    iterator end() noexcept { return iterator(nullptr); }
+    const_iterator end() const noexcept { return const_iterator(nullptr); }
+    const_iterator cbegin() const noexcept { return const_iterator(m_head.m_next); }
+    const_iterator cbefore_begin() const noexcept { return const_iterator(&m_head); }
+    const_iterator cend() const noexcept { return const_iterator(nullptr); }
+    
+// capacity:
+    bool empty() const noexcept { return m_head.m_next == nullptr; }
+    size_type max_size() const noexcept { return size_type(-1); }
+    
+// 23.3.4.4, element access:
+    reference front() { return *begin(); }
+    const_reference front() const { return *cbegin(); }
+    
+// 23.3.4.5, modifiers:
+    template <class... Args> void emplace_front(Args&&... args) {
+        Node* node = m_alloc.allocate(1, m_head.m_next);
+        m_alloc.construct(node, m_head.m_next, std::forward<Args>(args)...);
+        m_head.m_next = node;
+    }
+    
+    void push_front(const T& x) { emplace_front(x); }
+    void push_front(T&& x) { emplace_front(std::forward(x)); }
+    
+    void pop_front() {
+        Node* node = static_cast<Node*>(m_head.m_next);
+        m_head.m_next = node->m_next;
+        m_alloc.destroy(node);
+        m_alloc.deallocate(node, 1);
+    }
+    
+// 23.3.4.1
+    template <class... Args> iterator emplace_after(const_iterator position, Args&&... args) {
+        Node* node = m_alloc.allocate(1, position.m_node);
+        m_alloc.construct(node, position.m_node->m_next, std::forward<Args>(args)...);
+        position.m_node->m_next = node;
+        return iterator(node);
+    }
+    
+    iterator insert_after(const_iterator position, const T& x) { return emplace_after(position, x); }
+    iterator insert_after(const_iterator position, T&& x) { return emplace_after(position, std::forward(x)); }
+    iterator insert_after(const_iterator position, size_type n, const T& x) {
+        for (size_type i = 0; i < n; ++i)
+            position = emplace_after(position, x);
+        return position;
+    }
+    
+    template <class InputIterator>
+    iterator insert_after(const_iterator position, InputIterator first, InputIterator last) {
+        for (auto it = first; it != last; ++it)
+            position = emplace_after(position, *it);
+        return position;
+    }
+    
+    iterator insert_after(const_iterator position, initializer_list<T> il) { return insert_after(position, il.begin(), il.end()); }
+
+    iterator erase_after(const_iterator position, iterator last) noexcept {
+        Node_base* original_position = position.m_node;
+        ++position;
+        
+        //close the list
+        original_position->m_next = last.m_node;
+
+        //free the nodes
+        while (position != last) {
+            Node* current_node = static_cast<Node*>(position.m_node);
+            ++position;
+            m_alloc.destroy(current_node);
+            m_alloc.deallocate(current_node, 1);
+        }
+        return last;
+    }
+
+    iterator erase_after(const_iterator position) noexcept { 
+        Node* node_to_erase = static_cast<Node*>(position.m_node->m_next);
+ 
+        //close the list
+        position.m_node->m_next = node_to_erase->m_next;
+        
+        //free the node
+        m_alloc.destroy(node_to_erase);
+        m_alloc.deallocate(node_to_erase, 1);
+        
+        return iterator(position.m_node->m_next);
+    }
+    
+    void swap(forward_list<T,Allocator>& x) {
+        Node_base* tmp = m_head;
+        m_head = x.m_head;
+        x.m_head = tmp;
+    }
+    
+    void resize(size_type sz) {
+        size_type i = 0;
+        const_iterator last = before_begin();
+        const_iterator it = begin();
+        for (; i < sz && it != end() ;++i, ++last, ++it); //cycle through
+        for (; i < sz; ++i) //add nodes as required
+            last = emplace_after(last);
+        erase_after(last, end()); //remove nodes as required
+    }
+    
+    void resize(size_type sz, const value_type& c) {
+        size_type i = 0;
+        const_iterator last = before_begin();
+        const_iterator it = begin();
+        for (; i < sz && it != end() ;++i, ++last, ++it); //cycle through
+        for (; i < sz; ++i) //add nodes as required
+            last = emplace_after(last, c);
+        erase_after(last, end()); //remove nodes as required
+    }
+    
+    void clear() noexcept { erase_after(before_begin(), end()); }
+
+// 23.3.4.6, forward_list operations:
+    void splice_after(const_iterator position, forward_list<T,Allocator>& x) {
+        //find the second to last element
+        const_iterator second_to_last = x.before_begin();
+        while (second_to_last.m_node->m_next != nullptr) ++second_to_last;
+        
+        //find the second to last element
+        second_to_last.m_node->m_next = position.m_node->m_next;
+        position.m_node->m_next = x.m_head.m_next;
+
+        //fix the other container        
+        x.m_head.m_next = nullptr;
+    }
+
+    void splice_after(const_iterator position, forward_list<T,Allocator>& x, const_iterator first, const_iterator last) {
+        if (first == last) return;
+    
+        //find the second to last element
+        const_iterator second_to_last = first;
+        while (second_to_last.m_node->m_next != last.m_node) ++second_to_last;
+        
+        //do the actual splice
+        second_to_last.m_node->m_next = position.m_node->m_next;
+        position.m_node->m_next = first.m_node->m_next;
+        
+        //fix the other container
+        first.m_node->m_next = last.m_node;
+        
+        //here I am left wondering why i need x exactly. (first, last) is required to be a valid range, that should
+        //be enought right ?
+    }
+    
+    void splice_after(const_iterator position, forward_list<T,Allocator>& x, const_iterator i) {
+        if (i.m_node->m_next == nullptr) return;
+
+        auto node_to_splice = i.m_node->m_next;
+        
+        //skip it in the old list
+        i.m_node->m_next = i.m_node->m_next->m_next;
+        
+        //insert it in the new list
+        node_to_splice->m_next = position.m_node->m_next;
+        position.m_node->m_next = node_to_splice;
+    }
+    
+    void splice_after(const_iterator position, forward_list<T,Allocator>&& x, const_iterator first, const_iterator last) { splice_after(position, x, first, last); }
+    void splice_after(const_iterator position, forward_list<T,Allocator>&& x) noexcept { splice_after(position, x); }
+    void splice_after(const_iterator position, forward_list<T,Allocator>&& x, const_iterator i) noexcept { splice_after(position, x, i); }
+
+    template <class Predicate> void remove_if(Predicate pred) {
+        const_iterator last = before_begin();
+        const_iterator current = begin();
+        while (current != end()) {
+            if (pred(*current)) {
+                current = erase_after(last);
+            } else {
+                last = current;
+                ++current;
+            }
+        }
+        
+    }  
+
+    void remove(const T& value) {
+        remove_if([&value] (const T& other) { return other == value; } );
+    }    
+      
+    template <class BinaryPredicate> void unique(BinaryPredicate binary_pred) {
+        if (begin() == end()) return;
+        const_iterator last = begin();
+        const_iterator current = std::next(last);
+        while (current != end()) {
+            if (binary_pred(*last, *current))
+                current = erase_after(last);
+            else
+                last = current++;
+        }
+    }
+    
+    void unique() { unique(std::equal_to<const T&>()); }
+    
+    template <class Compare> void merge(forward_list<T,Allocator>& x, Compare comp) {    
+        //this algorithm is very similar to the one in list, if you change this
+        //give the other one some love too
+          
+        Node_base* current = &m_head;
+        Node_base* left = m_head.m_next;
+        Node_base*& right = x.m_head.m_next;
+        
+        if (right == nullptr) {
+            return;
+        } else if (left == nullptr) {
+            current->m_next = right;
+        } else {
+            while (true) {
+                if (comp(static_cast<Node*>(right)->m_value, static_cast<Node*>(left)->m_value)) { //think right > left, because left < right would make it not stable
+                    current->m_next = right;
+                    current = right;
+                    right = right->m_next;
+                    if (right == nullptr) {
+                        current->m_next = left;
+                        break;
+                    }
+                } else {
+                    current->m_next = left;
+                    current = left;
+                    left = left->m_next;
+                    if (left == nullptr) {
+                        current->m_next = right;
+                        break;
+                    }
+                }
+            }
+        }
+        x.m_head.m_next = nullptr;
+    }
+    
+    template <class Compare> void merge(forward_list<T,Allocator>&& x, Compare comp) { merge(x, comp); }   
+    void merge(forward_list<T,Allocator>& x) { merge(x, std::less<value_type>()); }
+    void merge(forward_list<T,Allocator>&& x) { merge(std::forward<forward_list<T,Allocator>&&>(x)); }
+    
+private:
+    //recursive mergesort (stable)
+    template <class Compare> void mergesort(const size_type& size, Compare comp) {
+        //base case, empty list or 1 element is always sorted
+        if (empty() || m_head.m_next->m_next == nullptr) return;
+
+        //we cut the list in half
+        auto half = begin();
+        for (size_type i = 0; i < size/2.0-1; ++i) ++half;
+        forward_list<T,Allocator> list2;
+        list2.m_head.m_next = half.m_node->m_next;
+        half.m_node->m_next = nullptr;
+        
+        //sort the halves
+        mergesort(std::ceil(size/2.0), comp);
+        list2.mergesort(std::floor(size/2.0), comp);
+
+        //merge the halves
+        merge(list2);
+    }
+    
+public:    
+    
+    template <class Compare> void sort(Compare comp) {
+        mergesort(std::distance(begin(), end()), comp);
+        //TODO: Is mergesort the best approach ?
+        //TODO: even if we settle on mergesort, the current implementation does 
+        //a lot of work to find the midpoint (n + (nlogn)/2) iterations approx
+        //it's hard to avoid but we could mitigate the damage by increasing the 
+        //number of partitions/iteration (increase that 2) or tabling midpoints
+    }
+    
+    void sort() { sort(std::less<const T&>()); }
+    
+    void reverse() noexcept {
+        Node_base* last = nullptr;
+        Node_base* current = m_head.m_next;
+        while (current != nullptr) {
+            auto next = current->m_next;
+            current->m_next = last;
+            last = current;
+            current = next;
+        }
+        m_head.m_next = last;
+    }
+};
+
+// Comparison operators
+template <class T, class Allocator>
+bool operator==(const forward_list<T,Allocator>& x, const forward_list<T,Allocator>& y) {
+    auto it1 = x.cbegin(), it2 = y.cbegin();
+    for (; it1 != x.cend() && it2 != y.cend(); ++it1, ++it2) {
+        if (*it1 != *it2) return false;
+    }
+    return (it1 == x.cend() && it2 == y.cend()); //they are both at the end
+}
+
+template <class T, class Allocator>
+bool operator!=(const forward_list<T,Allocator>& x, const forward_list<T,Allocator>& y) {
+    return !(x == y);
+}
+
+
+// 23.3.4.1
+template <class T, class Allocator>
+bool operator< (const forward_list<T,Allocator>& x, const forward_list<T,Allocator>& y) {
+    return lexicographical_compare(x.begin(), x.end(), y.begin(), y.end());
+}
+template <class T, class Allocator>
+bool operator> (const forward_list<T,Allocator>& x, const forward_list<T,Allocator>& y) {
+    return lexicographical_compare(y.begin(), y.end(), x.begin(), x.end());
+}
+template <class T, class Allocator>
+bool operator>=(const forward_list<T,Allocator>& x, const forward_list<T,Allocator>& y) {
+    return !(x < y);
+}
+template <class T, class Allocator>
+bool operator<=(const forward_list<T,Allocator>& x, const forward_list<T,Allocator>& y) {
+    return !(x > y);
+}
+
+// 23.3.4.7, specialized algorithms:
+template <class T, class Allocator>
+void swap(forward_list<T,Allocator>& x, forward_list<T,Allocator>& y) {
+    x.swap(y);
+}
+
+} //end namespace std
+
+#endif //STL_FORWARD_LIST_H
+
