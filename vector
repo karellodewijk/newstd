@@ -1,38 +1,105 @@
-#ifndef STL_LIST_H
-#define STL_LIST_H
+#ifndef STL_VECTOR_H
+#define STL_VECTOR_H
+
+#include <memory>
+#include <iostream>
+#include <cstring>
 
 namespace std {
 
 template <class T, class Allocator = allocator<T> >
 class vector {
+  private:
+    T* m_begin;
+    T* m_end;
+    T* m_memory_end;
+    Allocator m_alloc;
+
   public:
 
 // types:
     typedef T value_type;
     typedef value_type& reference;
     typedef const value_type& const_reference;
-    typedef implementation-defined iterator;   
-    typedef implementation-defined const_iterator; // see 23.2
-    typedef implementation-defined size_type; // see 23.2
-    typedef implementation-defined difference_type; // see 23.2
+    typedef value_type* iterator; // see 23.2
+    typedef const value_type* const_iterator; // see 23.2
+    typedef size_t size_type; // see 23.2
+    typedef ptrdiff_t difference_type; // see 23.2
     typedef Allocator allocator_type;
     typedef typename allocator_traits<Allocator>::pointer pointer;
     typedef typename allocator_traits<Allocator>::const_pointer const_pointer;
     typedef std::reverse_iterator<iterator> reverse_iterator;
     typedef std::reverse_iterator<const_iterator> const_reverse_iterator;
 
+public:
+
 // 23.3.6.2, construct/copy/destroy:
-    explicit vector(const Allocator& = Allocator());
-    explicit vector(size_type n);
-    vector(size_type n, const T& value, const Allocator& = Allocator());
-    template <class InputIterator>
-    vector(InputIterator first, InputIterator last, const Allocator& = Allocator());
-    vector(const vector<T,Allocator>& x);
-    vector(vector&&);
-    vector(const vector&, const Allocator&);
-    vector(vector&&, const Allocator&);
-    vector(initializer_list<T>, const Allocator& = Allocator());
-    ~vector();
+    explicit vector(const Allocator& alloc = Allocator()) : m_begin(0), m_end(0), m_memory_end(0), m_alloc(alloc) {}
+    
+    explicit vector(size_type n) : m_alloc(Allocator()), m_begin(m_alloc.allocate(n)), m_end(m_begin+n), m_memory_end(m_end) {
+        try {
+            for (--n; n > 0; --n)
+                m_alloc.construct(m_begin+n);
+        } catch (...) {
+            for (++n; n != size(); ++n)
+                m_alloc.destroy(m_begin+n);
+            m_alloc.deallocate(m_begin, capacity());
+            throw;
+        }
+    }    
+    
+    vector(size_type n, const T& value, const Allocator& alloc = Allocator()) : m_alloc(alloc), m_begin(m_alloc.allocate(n)), m_end(m_begin+n), m_memory_end(m_end) {
+        try {
+            for (--n; n > 0; --n)
+                m_alloc.construct(m_begin+n, value);
+        } catch (...) {
+            for (++n; n != size(); ++n)
+                m_alloc.destroy(m_begin+n);
+            m_alloc.deallocate(m_begin, capacity());
+            throw;
+        }
+    }
+
+    //just for input iterators, just ignore the sfinae part, I always do
+    template <class InputIterator, typename enable_if<is_same<typename std::iterator_traits<InputIterator>::iterator_category, input_iterator_tag>::value, int>::type = 0>
+    vector(InputIterator first, InputIterator last, const Allocator& alloc = Allocator()) : vector(alloc) {
+        for (; first != last; ++first)
+            emplace_back(*first);
+    }
+
+    //all other iterators, just ignore the sfinae part, I always do
+    template <class InputIterator, typename enable_if<!is_same<typename std::iterator_traits<InputIterator>::iterator_category, input_iterator_tag>::value, int>::type = 0>
+    vector(InputIterator first, InputIterator last, const Allocator& alloc = Allocator()) 
+        : m_alloc(alloc), m_begin(m_alloc.allocate(std::distance(first, last))), m_end(m_begin+std::distance(first, last)), m_memory_end(m_end) 
+    {        
+        auto begin = m_begin;
+        try {
+            for (; begin != m_end; ++first, ++begin)
+                m_alloc.construct(begin, *first);
+        } catch (...) {
+            for (--begin; begin != m_begin-1; --begin)
+                m_alloc.destroy(begin);
+            m_alloc.deallocate(m_begin, capacity());
+            throw;
+        }
+    }
+
+    vector(const vector& x, const Allocator& alloc) : vector(x.begin(), x.end(), alloc) {}
+    
+    vector(const vector<T,Allocator>& x) : vector(x, x.get_allocator()) {}
+        
+    vector(vector&& x, const Allocator& alloc) : m_alloc(alloc), m_begin(x.m_begin), m_end(x.m_end), m_memory_end(x.m_memory_end) {
+        x.m_begin(nullptr);
+        x.m_end(nullptr);
+        x.m_memory_end(nullptr);
+    }
+
+    vector(vector&& x) : vector(std::forward<vector&&>(x), x.get_allocator()) {}
+    
+    vector(initializer_list<T> x, const Allocator& alloc = Allocator()) : vector(x.begin(), x.end(), alloc) { }
+    
+    ~vector() { clear(); }
+    
     vector<T,Allocator>& operator=(const vector<T,Allocator>& x);
     vector<T,Allocator>& operator=(vector<T,Allocator>&& x);
     vector& operator=(initializer_list<T>);
@@ -40,30 +107,32 @@ class vector {
     void assign(InputIterator first, InputIterator last);
     void assign(size_type n, const T& u);
     void assign(initializer_list<T>);
-    allocator_type get_allocator() const noexcept;
+    allocator_type get_allocator() const noexcept { return m_alloc; }
 
 // iterators:
-    iterator begin() noexcept;
-    const_iterator begin() const noexcept;
-    iterator end() noexcept;
-    const_iterator end() const noexcept;
-    reverse_iterator rbegin() noexcept;
-    const_reverse_iterator rbegin() const noexcept;
-    reverse_iterator rend() noexcept;
-    const_reverse_iterator  rend() const noexcept;
-    const_iterator cbegin() const noexcept;
-    const_iterator cend() const noexcept;
-    const_reverse_iterator crbegin() const noexcept;
-    const_reverse_iterator  crend() const noexcept;
+    iterator begin() noexcept { return m_begin; }
+    const_iterator begin() const noexcept { return m_begin; }
+    iterator end() noexcept { return m_end; }
+    const_iterator end() const noexcept { return m_end; }
+    reverse_iterator rbegin() noexcept { return reverse_iterator(end()); }
+    const_reverse_iterator rbegin() const noexcept { return const_reverse_iterator(cend()); }
+    reverse_iterator rend() noexcept { return reverse_iterator(begin()); }
+    const_reverse_iterator  rend() const noexcept { return const_reverse_iterator(cbegin()); }
+    const_iterator cbegin() const noexcept { return m_begin; }
+    const_iterator cend() const noexcept { return m_end; }
+    const_reverse_iterator crbegin() const noexcept { return const_reverse_iterator(cend()); }
+    const_reverse_iterator  crend() const noexcept { return const_reverse_iterator(cbegin()); }
     
 // 23.3.6.3, capacity:
-    size_type size() const noexcept;
+    size_type size() const noexcept { return m_end - m_begin; }
     size_type max_size() const noexcept;
     void resize(size_type sz);
     void resize(size_type sz, const T& c);
-    size_type capacity() const noexcept;
+    size_type capacity() const noexcept { return m_memory_end - m_begin; }
     bool empty() const noexcept;
-    void reserve(size_type n);
+    void reserve(size_type n) {
+        
+    }
     void shrink_to_fit();
     
 // element access:
@@ -95,7 +164,11 @@ class vector {
     iterator erase(const_iterator position);
     iterator erase(const_iterator first, const_iterator last);
     void swap(vector<T,Allocator>&);
-    void clear() noexcept;
+    void clear() noexcept {
+        for (auto it = m_begin; it != m_end; ++it)
+            m_alloc.destroy(it);
+        m_alloc.deallocate(m_begin, capacity());
+    }
 };
 
 template <class T, class Allocator>
