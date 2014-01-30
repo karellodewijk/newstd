@@ -352,6 +352,15 @@ public:
         
     }  
 
+    void debug() {
+        std::cout << "head: address(" << &m_head<< ") next(" << m_head.m_next << ")" << std::endl;
+        for (auto it = begin(); it != end(); ++it) {
+            Node* node = static_cast<Node*>(it.m_node);
+            std::cout << "node: value(" << node->m_value << ") address(" << node << ") next(" << node->m_next << ")" << std::endl;
+        }
+        std::cout << std::endl;
+    }
+
     void remove(const T& value) {
         remove_if([&value] (const T& other) { return other == value; } );
     }    
@@ -430,11 +439,147 @@ private:
         //merge the halves
         merge(list2);
     }
+
+    //timsort without galloping optimization (stable)
+    //always wanted to try a timsort, see what all the fuss is about
+    template <class Compare, int power_of_2 = 5> void timsort(Compare comp) {
+        //base case, empty list or 1 element is always sorted
+        if (empty() || m_head.m_next->m_next == nullptr) return;
+        
+        size_type size = std::distance(begin(), end());
+        
+        const static size_type min_minrun = pow(2, power_of_2);
+        if (size < min_minrun) {
+            insertionsort(end(), begin(), end(), comp);
+            return;
+        }
+        
+        // minrun is chosen from the range 32 to 64 inclusive, such that the size of the array, divided by minrun, is equal to, or slightly smaller than, a power of two
+        // <=>  minimize(log2(size/minrun) - y) | minrun, y member of Positive integers, minrun in [32 64], y > 0, log2(size/minrun) < y
+        // pff sentence one on the wikipedia page translates into a heavily constrained optimization problem, I'm starting to disllike Tim
+        
+        // anyway, things are not that grim
+        // since minrun is in the range (32, 64] <=> y in [ log2(size/64), log2(size/32) ]
+        // <=> y in [ log2(size) - log2(64), log2(size) - log2(32) ]
+        // <=> y in [ log2(size) - 6, log2(size) - 5 ]
+        // we see that the range is only 1 in size, so contains only 1 (well techincally 2 if log2(size) is exactly 32 or 64)
+        // so y is a lot more constrained than we thought, it is exactly std::floor(-5+log2(size))
+        // now with y known minimize(log2(size/minrun) - y) becomes a whole lot easier
+        // if minrun wasn't contrained to an integer the solution would be log2(size/minrun) - y = 0 <=> minrun = size()/2^y
+        // So the integer solutions are minrun = floor(size()/2^y) v minrun = ceil(size()/2^y)
+        // but floor(size()/2^y) would violate log2(size/minrun) < y, so the only possible solution is minrun = ceil(size()/2^y)
+        // so in code:
+        
+        size_type minrun = std::ceil(size/std::pow(2, -power_of_2+std::floor(std::log2(size))));
+
+        //I've taken a look at how Tim implemented it, he uses some bit shifting, not sure which would be faster
+        //neither will make much of an impact though 
+        
+        forward_list<std::pair<forward_list<T,Allocator>, size_type> > merge_stack;        
+        iterator last, current = begin();
+
+        do {
+            size_type run_size = 1;
+            last = current++;
+                 
+            if (comp(*last, *current)) {
+                last = current++, ++run_size;
+                while ((current != end()) && comp(*last, *current))
+                    last = current++, ++run_size;
+            } else {
+                last = current++, ++run_size;
+                while ((current != end()) && !comp(*last, *current))
+                    last = current++, ++run_size;
+                reverse(before_begin(), begin(), current);
+                last = begin();
+            }
+            
+            //extend the run to minrun
+            if (run_size < minrun) {
+                size_type items_to_add = minrun-run_size;
+                auto hint = last; //everything before hint is already sorted
+                std::advance(current, items_to_add);
+                run_size += items_to_add;
+                insertionsort(before_begin(), hint, current, comp); //sort the part of the run that's not sorted       
+            } 
+
+            //create this run as a new list on the stack
+            merge_stack.emplace_front();
+            
+            //splice the nodes out
+            //splice(merge_stack.front().begin(), *this, begin(), current) would start counting nodes to determine the size, so we use these 3 lines instead
+            merge_stack.front().first.splice_after(merge_stack.front().first.before_begin(), *this, before_begin(), current);            
+            merge_stack.front().second = run_size;
+            size -= run_size;
+
+            //collapse stacks
+            while (!merge_stack.empty() && ++merge_stack.begin() != merge_stack.end()) { //size > 1
+                auto first = merge_stack.begin();
+                auto second = std::next(first);
+                auto third = std::next(second); //at worst the end iterator
+                if (third != merge_stack.end() && third->second <= first->second + second->second) {
+                    third->first.merge(second->first);
+                    third->second += second->second; //update size
+                    merge_stack.erase_after(first);         
+                } else if (second->second <= first->second) {
+                    second->first.merge(first->first);
+                    second->second += first->second; //update size
+                    merge_stack.pop_front();
+                } else {
+                    break;
+                }
+            } 
+        } while (size >= minrun);
+        
+        //sort whatever is still in *this (<minrun) and merge it with the top of the stack
+        if (size > 1) {
+            insertionsort(before_begin(), begin(), end(), comp); //end is equivalent to before_begin        
+        }
+        merge_stack.begin()->first.merge(*this);
+               
+        //fully collapse to 1 stack
+        while (!merge_stack.empty() && ++merge_stack.begin() != merge_stack.end()) {  //size > 1
+            auto top = merge_stack.begin();
+            auto second = std::next(top);
+            second->first.merge(top->first);
+            merge_stack.pop_front();
+        }
+
+        *this = std::move(merge_stack.front().first);
+    }
+
+    //insertion sort (stable), only for valid ranges with size >= 2
+    template <class Compare> void insertionsort(iterator before_begin, iterator last_sorted_item, iterator end, Compare comp) {
+        for (auto i = std::next(last_sorted_item); i != end;) {
+            if (!comp(*i, *last_sorted_item)) { //optimization, can be left out
+                last_sorted_item = i++;
+                continue;
+            }
+            iterator j;
+            for (j = before_begin; j != end && !comp(*i, *std::next(j)); ++j); //make j point to the largest element strictly smaller than *i
+            splice_after(j, *this, last_sorted_item); //insert the node after j
+            i = std::next(last_sorted_item);
+        }
+    }
+    
+    //reverse function
+    void reverse(iterator before_begin, iterator begin, iterator end) {
+        Node_base* last = end.m_node;
+        Node_base* current = begin.m_node;
+        while (current != end.m_node) {
+            auto next = current->m_next;
+            current->m_next = last;
+            last = current;
+            current = next;        
+        }
+        before_begin.m_node->m_next = last;
+    }
     
 public:    
     
     template <class Compare> void sort(Compare comp) {
-        mergesort(std::distance(begin(), end()), comp);
+        //mergesort(std::distance(begin(), end()), comp);
+        timsort<Compare, 3>(comp);
         //TODO: Is mergesort the best approach ?
         //TODO: even if we settle on mergesort, the current implementation does 
         //a lot of work to find the midpoint (n + (nlogn)/2) iterations approx

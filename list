@@ -568,9 +568,12 @@ public:
     //timsort without galloping optimization (stable)
     //always wanted to try a timsort, see what all the fuss is about
     template <class Compare, int power_of_2 = 5> void timsort(Compare comp) {
+        //base case, empty list or 1 element is always sorted
+        if (size() < 2) return;
+        
         const static size_type min_minrun = pow(2, power_of_2);
         if (m_size < min_minrun) {
-            insertionsort(end(), begin(), end(), comp);
+            insertionsort(end(), ++begin(), end(), comp);
             return;
         }
         
@@ -598,7 +601,7 @@ public:
         list<list<T,Allocator> > merge_stack;        
         iterator last, current = begin();
 
-        do { //we already know we have atleast minrun els as we checked at the beginning
+        do { //we already know we have at least minrun els as we checked at the beginning
             size_type run_size = 1;
             last = current++;
                  
@@ -619,7 +622,7 @@ public:
                 auto hint = current; //everything before hint is already sorted
                 std::advance(current, items_to_add);
                 run_size += items_to_add;
-                insertionsort(std::prev(begin()), hint, current, comp); //sort the part of the run that's not sorted       
+                insertionsort(end(), hint, current, comp); //sort the part of the run that's not sorted       
             } 
 
             //create this run as a new list on the stack
@@ -650,9 +653,11 @@ public:
         } while (m_size >= minrun);
         
         //sort whatever is still in *this (<minrun) and merge it with the top of the stack
-        insertionsort(end(), begin(), end(), comp);        
+        if (m_size > 1) {
+            insertionsort(end(), ++begin(), end(), comp); //end is equivalent to before_begin        
+        }
         merge_stack.begin()->merge(*this);
-        
+      
         //fully collapse to 1 stack
         while (merge_stack.size() > 1) {
             auto top = merge_stack.begin();
@@ -664,7 +669,7 @@ public:
         *this = std::move(merge_stack.front());
     }
 
-    //insertion sort (stable), requirements: range contains at least 1 element
+    //insertion sort (stable)
     template <class Compare> void insertionsort(iterator before_begin, iterator first_unsorted_item, iterator last, Compare comp) {
         for (auto i = first_unsorted_item; i != last;) {
             iterator j(std::prev(i)); 
@@ -689,7 +694,7 @@ public:
         
         //remove these 4 lines to disable insertionsort fallback
         if (size() < 64) {
-            insertionsort(end(), begin(), end(), comp);
+            insertionsort(end(), ++begin(), end(), comp); //end() is equivalent to before_begin
             return;
         }
 
