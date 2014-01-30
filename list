@@ -64,6 +64,7 @@ class list {
                 return !(*this == other);
             }
             list_iterator<U>& operator++() {
+                std::cout << "increament" << std::endl;
                 m_node = m_node->m_next;
                 return *this;
             }
@@ -669,7 +670,7 @@ public:
         *this = std::move(merge_stack.front());
     }
 
-    //insertion sort (stable)
+    //insertion sort (stable), requirements range has 2 or more elements
     template <class Compare> void insertionsort(iterator before_begin, iterator first_unsorted_item, iterator last, Compare comp) {
         for (auto i = first_unsorted_item; i != last;) {
             iterator j(std::prev(i)); 

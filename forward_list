@@ -562,7 +562,7 @@ private:
         }
     }
     
-    //reverse function
+    //reverse function (stable)
     void reverse(iterator before_begin, iterator begin, iterator end) {
         Node_base* last = end.m_node;
         Node_base* current = begin.m_node;
