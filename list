@@ -64,7 +64,6 @@ class list {
                 return !(*this == other);
             }
             list_iterator<U>& operator++() {
-                std::cout << "increament" << std::endl;
                 m_node = m_node->m_next;
                 return *this;
             }
