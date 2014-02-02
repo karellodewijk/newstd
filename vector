@@ -316,15 +316,37 @@ public:
     size_type max_size() const noexcept { return std::min(size_type(-1)/sizeof(T), m_alloc.max_size()); }  
     
     void resize(size_type sz) {
-        if (sz > size())
-            insert(end(), sz-size());
+        if (sz > size()) {
+            reserve(sz);
+            iterator it = m_end;
+            try {
+                for (; it != m_end + (sz - size()); ++it)
+                    initialize(it);
+            } catch (...) {
+                for (; it != m_end; --it)
+                    m_alloc.destroy(it-1);
+                throw;
+            }
+            m_end += (sz - size());
+        }
         else if (sz < size())
             erase(begin()+sz, end());
     }
     
     void resize(size_type sz, const T& c) {
-        if (sz > size())
-            insert(end(), sz-size(), c);
+        if (sz > size()) {
+            reserve(sz);
+            iterator it = m_end;
+            try {
+                for (; it != m_end + (sz - size()); ++it)
+                    initialize(it, c);
+            } catch (...) {
+                for (; it != m_end; --it)
+                    m_alloc.destroy(it-1);
+                throw;
+            }
+            m_end += (sz - size());
+        }
         else if (sz < size())
             erase(begin()+sz, end());
     }
