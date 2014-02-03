@@ -54,30 +54,18 @@ class vector {
     pointer m_memory_end;
     allocator_type m_alloc;
 
-
-
-    //this is copying an element if it has a copy constructor or noexcept move constructor
-    template <class V>
-    inline void copy_construct(T* const & dest, V&& value) {
-        allocator_traits<allocator_type>::construct(m_alloc, dest, std::forward<V>(value));
+    template <class... Args>  
+    inline void _construct(pointer const & dest, Args&&... args) {
+         allocator_traits<allocator_type>::construct(m_alloc, &*dest, std::forward<Args>(args)...);
     }
 
-    //this is assign when an item has an assign operator or noexcept move assign operator
     template <class V>
-    inline void move_assign(T* const & dest, V&& value) {
+    inline void _assign(pointer const & dest, V&& value) {
         *dest = std::forward<V>(value);
     }
 
-    //this is assign when an item has an assign operator or noexcept move assign operator
-    template <class V>
-    inline void copy_assign(T* const & dest, V&& value) {
-        *dest = std::forward<V>(value);
-    }
-
-    //this is assign when an item has an assign operator or noexcept move assign operator
-    template <class... Args>
-    inline void initialize(T* const & dest, Args&&... args) {
-         allocator_traits<allocator_type>::construct(m_alloc, dest, std::forward<Args>(args)...);
+    inline void _destroy(pointer const & dest) {
+        allocator_traits<allocator_type>::destroy(m_alloc, &*dest);
     }
 
     //Either copy n x T from begin to dst or if that fails, destroy everything copied so far, deallocate dest and throw 
@@ -85,16 +73,16 @@ class vector {
         size_type i = 0;
         try {
             for (; i < size(); ++i)
-                copy_construct(dest+i, move_if_noexcept(*(m_begin+i)));
+                _construct(dest+i, move_if_noexcept(*(m_begin+i)));
         } catch (...) {
             for (; i > 0; --i)
-                allocator_traits<allocator_type>::destroy(m_alloc, dest+i-1);
+                _destroy(dest+i-1);
             m_alloc.deallocate(dest, alloc_size);
             throw;
         }
         
         for (iterator it = m_begin; it != m_end ; ++it)
-            allocator_traits<allocator_type>::destroy(m_alloc, it);
+            _destroy(it);
 
         m_alloc.deallocate(m_begin, capacity());
         m_end = dest + size();
@@ -109,27 +97,27 @@ class vector {
         
         try {
             for (; src != position; ++src, ++dst)
-                copy_construct(dst, move_if_noexcept(*src));
+                _construct(dst, move_if_noexcept(*src));
 
             iterator dst2 = dst + gap_size;
             try {
                 for (; src != m_end; ++src, ++dst2)
-                    copy_construct(dst2, move_if_noexcept(*src));                 
+                    _construct(dst2, move_if_noexcept(*src));                 
             } catch (...) {
                  for (; dst2 != dst + gap_size; --dst2)
-                     allocator_traits<allocator_type>::destroy(m_alloc, dst2-1);
+                     _destroy(dst2-1);
                  throw;             
             }
 
         } catch (...) {
             for (; dst != dest; --dst)
-                allocator_traits<allocator_type>::destroy(m_alloc, dst-1);
+                _destroy(dst-1);
             m_alloc.deallocate(dest, alloc_size);
             throw;
         }
         
         for (iterator it = m_begin; it != m_end ; ++it)
-            allocator_traits<allocator_type>::destroy(m_alloc, it);
+            _destroy(it);
 
         m_alloc.deallocate(m_begin, capacity());
         m_end = dest + size();
@@ -137,32 +125,32 @@ class vector {
         m_memory_end = m_begin + alloc_size;
     }
 
-    //Either initialize n x T at begin or if that fails, clean up
+    //Either _construct n x T at begin or if that fails, clean up
     template <class... Args>  
-    void initialize_or_cleanup(Args&&... args) {
+    void construct_or_cleanup(Args&&... args) {
         auto it = m_begin;
         try {
             for (; it != m_end; ++it)
-                initialize(it, std::forward<Args>(args)...);
+                _construct(it, std::forward<Args>(args)...);
         } catch (...) {
             while (it != m_begin)
-                allocator_traits<allocator_type>::destroy(m_alloc, --it);
+                _destroy(--it);
             m_alloc.deallocate(m_begin, m_memory_end - m_begin);
             m_begin = m_end = m_memory_end = nullptr;
             throw;
         }
     }
 
-    //Either initialize n x T at begin or if that fails, clean up
+    //Either _construct n x T at begin or if that fails, clean up
     template <class Iterator>
-    void initialize_or_cleanup(Iterator first, Iterator last) {
+    void construct_or_cleanup(Iterator first, Iterator last) {
         iterator it = m_begin;
         try {
             for (; it != m_end; ++first, ++it)
-                initialize(it, *first);
+                _construct(it, *first);
         } catch (...) {
             while (it != m_begin)
-                allocator_traits<allocator_type>::destroy(m_alloc, --it);
+                _destroy(--it);
             m_alloc.deallocate(m_begin, m_memory_end - m_begin);
             m_begin = m_end = m_memory_end = nullptr;
             throw;
@@ -173,15 +161,15 @@ class vector {
     
 public:
 
-// 23.3.6.2, construct/copy/destroy:
+// 23.3.6.2, _construct/copy/destroy:
     explicit vector(const Allocator& alloc = Allocator()) : m_begin(nullptr), m_end(nullptr), m_memory_end(nullptr), m_alloc(alloc) {}
     
     explicit vector(size_type n) : m_alloc(Allocator()), m_begin(m_alloc.allocate(n)), m_end(m_begin+n), m_memory_end(m_end) {
-        initialize_or_cleanup();
+        construct_or_cleanup();
     }    
     
     vector(size_type n, const T& value, const Allocator& alloc = Allocator()) : m_alloc(alloc), m_begin(m_alloc.allocate(n)), m_end(m_begin+n), m_memory_end(m_end) {
-        initialize_or_cleanup(value);
+        construct_or_cleanup(value);
     }
 
     //just for input iterators, just ignore the sfinae part, I always do
@@ -199,49 +187,78 @@ private:
         , m_end(m_begin + n)
         , m_memory_end(m_end) 
     {
-        initialize_or_cleanup(first, last);
+        construct_or_cleanup(first, last);
     }
 
 public:
     //all other iterators, just ignore the sfinae part, I always do
     template <class InputIterator, typename enable_if<!is_same<typename std::iterator_traits<InputIterator>::iterator_category, input_iterator_tag>::value, int>::type = 0>
     vector(InputIterator first, InputIterator last, const Allocator& alloc = Allocator()) 
-        : vector(std::distance(first, last), first, last, alloc) //just delegate to the constructor bove with distance(first, last) calculated so I can use it twice without calculating it twice
+        : vector(std::distance(first, last), first, last, alloc) //just delegate to the _constructor bove with distance(first, last) calculated so I can use it twice without calculating it twice
     {}
 
     vector(const vector& x, const Allocator& alloc) : vector(x.begin(), x.end(), alloc) {}
     
-    vector(const vector<T,Allocator>& x) : vector(x, x.get_allocator()) {}
+    vector(const vector<T,Allocator>& x) : vector(x, allocator_traits<allocator_type>::select_on_container_copy__construction(x.get_allocator())) {}
         
-    vector(vector&& x, const Allocator& alloc) : m_alloc(alloc), m_begin(x.m_begin), m_end(x.m_end), m_memory_end(x.m_memory_end) {
+    vector(vector&& x, const Allocator& alloc) 
+        noexcept(is_nothrow_copy_constructible<allocator_type>::value
+              && is_nothrow_constructible<pointer, typename decltype(x)::pointer>::value
+              && noexcept(x.m_begin = nullptr)) 
+        
+        : m_alloc(alloc), m_begin(x.m_begin), m_end(x.m_end), m_memory_end(x.m_memory_end) 
+    {
         x.m_begin = nullptr;
         x.m_end = nullptr;
         x.m_memory_end = nullptr;
     }
 
-    vector(vector&& x) : vector(std::move(x), x.get_allocator()) {}
+    vector(vector&& x)  
+        noexcept(is_nothrow_move_constructible<allocator_type>::value
+              && is_nothrow_constructible<pointer, typename decltype(x)::pointer>::value
+              && noexcept(x.m_begin = nullptr)) 
+        
+        : m_alloc(std::move(x.get_allocator())), m_begin(x.m_begin), m_end(x.m_end), m_memory_end(x.m_memory_end) 
+    {
+        x.m_begin = nullptr;
+        x.m_end = nullptr;
+        x.m_memory_end = nullptr;
+    }
     
     vector(initializer_list<T> x, const Allocator& alloc = Allocator()) : vector(x.begin(), x.end(), alloc) {}
     
     ~vector() { clear(); }
+
+private:
+    //with alloc propagate
+    void copy_assign(const vector<T,Allocator>& x, true_type) {
+        clear(); //we can not reuse the memory since the allocator state might change
+        m_alloc = allocator_traits<allocator_type>::select_on_container_copy__construction(x.get_allocator());
+        m_alloc.allocate(m_begin, x.size());
+        m_memory_end = m_end = m_begin + x.size();
+        construct_or_cleanup(x.begin(), x.end());
+    }
+
+    //without alloc propagate
+    void copy_assign(const vector<T,Allocator>& x, false_type) {
+        assign(x.begin(), x.end());
+    }
+
+public:
     
     vector<T,Allocator>& operator=(const vector<T,Allocator>& x) {
-        for (auto it = m_begin; it != m_end; ++it)
-            allocator_traits<allocator_type>::destroy(m_alloc, it);
-        if (capacity() < x.size()) {
-            m_alloc.dealloc(m_begin, capacity());
-            m_begin = m_alloc.allocate(x.size(), x.m_begin);
-            m_end(m_begin+x.size());
-            m_memory_end(m_end);
-            initialize_or_cleanup(m_begin, m_end, m_memory_end, x.begin(), x.end());
-        }       
+        copy_assign(x, integral_constant<bool, allocator_traits<allocator_type>::propagate_on_container_copy_assignment::value>());
+        return *this;
     }
-    
-    vector<T,Allocator>& operator=(vector<T,Allocator>&& x) {
-        clear();
-        
+
+private:
+    void move_assign_impl(vector<T,Allocator>&& x)
+        noexcept( noexcept(m_begin = x.m_begin) 
+               && noexcept(x.m_begin = nullptr)
+        )
+    {
         //steal data
-        m_alloc = x.m_alloc;
+        m_alloc = allocator_traits<allocator_type>::select_on_container_copy_construction(x.get_allocator());
         m_begin = x.m_begin;
         m_end = x.m_end;
         m_memory_end = x.m_memory_end;
@@ -249,8 +266,34 @@ public:
         //zero out other
         x.m_begin = nullptr;
         x.m_end = nullptr;
-        x.m_memory_end = nullptr;
-        
+        x.m_memory_end = nullptr;        
+    }
+
+    //with alloc propagate
+    void move_assign(vector<T,Allocator>&& x, true_type) 
+        noexcept( noexcept(m_alloc = allocator_traits<allocator_type>::select_on_container_copy_construction(x.get_allocator()))
+               && noexcept(move_assign_impl(move(x))) 
+        )
+    {
+        clear();
+        m_alloc = allocator_traits<allocator_type>::select_on_container_copy_construction(x.get_allocator());
+        move_assign_impl(move(x));
+    }
+
+    //without alloc propagate
+    void move_assign(vector<T,Allocator>&& x, false_type) 
+        noexcept( noexcept(move_assign_impl(move(x))) )
+    {
+        clear();
+        move_assign_impl(move(x));
+    }
+
+public:
+    
+    vector<T,Allocator>& operator=(vector<T,Allocator>&& x)
+        noexcept( noexcept( move_assign(move(x), integral_constant<bool, allocator_traits<allocator_type>::propagate_on_container_move_assignment::value>()) ) )  
+    {
+        move_assign(move(x), integral_constant<bool, allocator_traits<allocator_type>::propagate_on_container_move_assignment::value>());
         return *this;     
     }
         
@@ -258,16 +301,61 @@ public:
         assign(x);
         return *this;
     }
-    
-    template <class InputIterator>
+
+    //only for input iterators
+    template <class InputIterator, typename enable_if<is_same<typename std::iterator_traits<InputIterator>::iterator_category, input_iterator_tag>::value, int>::type = 0>    
     void assign(InputIterator first, InputIterator last) {
-        clear();
-        insert(begin(), first, last);
+        for (auto it = m_begin; it != m_end; ++it)
+            _destroy(it);
+        m_end = m_begin;
+        for (;first != last; ++first)
+            emplace_back(*first);
+    }
+
+    //for all other iterators
+    template <class InputIterator, typename enable_if<!is_same<typename std::iterator_traits<InputIterator>::iterator_category, input_iterator_tag>::value, int>::type = 0>    
+    void assign(InputIterator first, InputIterator last) {
+        size_type n = std::distance(first, last);
+        if (capacity() < n) {
+            clear();
+            m_begin = m_alloc.allocate(n);
+            m_memory_end = m_end = m_begin + n;
+            construct_or_cleanup(first, last);
+        } else {
+        auto it = begin();
+            if (size() < n) { 
+                for (;it != end(); ++it, ++first)
+                    _assign(it, *first);
+                for (;first != last; ++it, ++first)
+                    _construct(it, *first);
+            } else {
+                for (; first != last; ++it, ++first)
+                    _assign(it, *first);
+                erase(it, end());
+            }
+        }
     }
     
     void assign(size_type n, const T& u) {
-        clear();
-        insert(begin(), n, u);
+        if (capacity() < n) {
+            clear();
+            m_begin = m_alloc.allocate(n);
+            m_memory_end = m_end = m_begin + n;
+            construct_or_cleanup(u);
+        } else {
+        auto it = begin();
+            size_type i = 0;
+            if (size() < n) { 
+                for (;it != end(); ++it, ++i)
+                    _assign(it, u);
+                for (;i < n; ++it, ++i)
+                    _construct(it, u);
+            } else {
+                for (; i < n; ++it, ++i)
+                    _assign(it, u);
+                erase(it, end());
+            }
+        }
     }
     
     void assign(initializer_list<T> x) { assign(x.begin(), x.end()); }
@@ -298,10 +386,10 @@ public:
             iterator it = m_end;
             try {
                 for (; it != m_end + (sz - size()); ++it)
-                    initialize(it);
+                    _construct(it);
             } catch (...) {
                 for (; it != m_end; --it)
-                    allocator_traits<allocator_type>::destroy(m_alloc, it-1);
+                    _destroy(it-1);
                 throw;
             }
             m_end += (sz - size());
@@ -316,10 +404,10 @@ public:
             iterator it = m_end;
             try {
                 for (; it != m_end + (sz - size()); ++it)
-                    initialize(it, c);
+                    _construct(it, c);
             } catch (...) {
                 for (; it != m_end; --it)
-                    allocator_traits<allocator_type>::destroy(m_alloc, it-1);
+                    _destroy(it-1);
                 throw;
             }
             m_end += (sz - size());
@@ -384,13 +472,13 @@ public:
         if (m_end == m_memory_end) //no more room
             reserve(std::max(size_type(MIN_CAPACITY), size_type(std::round(size() * GROWTH_RATIO))));
 
-        initialize(m_end, std::forward<Args>(args)...);
+        _construct(m_end, std::forward<Args>(args)...);
         ++m_end;
     }
     
     void push_back(const T& x) { emplace_back(x); }
     void push_back(T&& x) { emplace_back(std::move(x)); }
-    void pop_back() { allocator_traits<allocator_type>::destroy(m_alloc, --m_end); }
+    void pop_back() { _destroy(--m_end); }
 
     template <class... Args> iterator emplace(const_iterator position, Args&&... args) {
         if (m_end == m_memory_end) { //no more room
@@ -405,41 +493,41 @@ public:
 
             auto insert_it = const_cast<iterator>(position);
             try {
-                copy_construct(insert_it, std::forward<Args>(args)...);            
+                _construct(insert_it, std::forward<Args>(args)...);            
             } catch(...) {
                 //we will not be needing that gap after all, so let's close it shall we
-                copy_construct(insert_it, move_if_noexcept(*(insert_it+1)));
+                _construct(insert_it, move_if_noexcept(*(insert_it+1)));
                 for (; insert_it != m_end; ++insert_it)
-                    move_assign(insert_it, move_if_noexcept(*(insert_it+1)));
+                    _assign(insert_it, move_if_noexcept(*(insert_it+1)));
                 throw;
             }
 
         } else {
             //see insert(position, first, last)
             if (position == m_end) {
-                initialize(position, std::forward<Args>(args)...);
+                _construct(position, std::forward<Args>(args)...);
             } else {
-                copy_construct(m_end, move_if_noexcept(*(m_end-1)));
+                _construct(m_end, move_if_noexcept(*(m_end-1)));
                 auto it2 = m_end-1;
                 try {
                     for (; it2 >= position+1; --it2)
-                        move_assign(it2, move_if_noexcept(*(it2-1)));
+                        _assign(it2, move_if_noexcept(*(it2-1)));
 
                     auto insert_it = const_cast<iterator>(position);
                     try {
-                        allocator_traits<allocator_type>::destroy(m_alloc, insert_it);
-                        initialize(insert_it, std::forward<Args>(args)...);
+                        _destroy(insert_it);
+                        _construct(insert_it, std::forward<Args>(args)...);
                     } catch (...) {
-                        copy_construct(insert_it, move_if_noexcept(*(insert_it+1)));
+                        _construct(insert_it, move_if_noexcept(*(insert_it+1)));
                         ++it2;
                         throw;                        
                     }
                     
                 } catch(...) {
                     for (; it2 != m_end-1; ++it2)
-                        move_assign(it2-1, move_if_noexcept(*it2));
-                    move_assign(m_end-1, move_if_noexcept(*(m_end)));
-                    allocator_traits<allocator_type>::destroy(m_alloc, m_end);
+                        _assign(it2-1, move_if_noexcept(*it2));
+                    _assign(m_end-1, move_if_noexcept(*(m_end)));
+                    _destroy(m_end);
                     throw;
                 }
             }
@@ -461,34 +549,34 @@ public:
 
             auto insert_it = const_cast<iterator>(position);
             try {
-                copy_construct(insert_it, x);            
+                _construct(insert_it, x);            
             } catch(...) {
                 //we will not be needing that gap after all, so let's close it shall we
-                copy_construct(insert_it, move_if_noexcept(*(insert_it+1)));
+                _construct(insert_it, move_if_noexcept(*(insert_it+1)));
                 for (; insert_it != m_end; ++insert_it)
-                    move_assign(insert_it, move_if_noexcept(*(insert_it+1)));
+                    _assign(insert_it, move_if_noexcept(*(insert_it+1)));
                 throw;
             }
 
         } else {
             //see insert(position, first, last)
             if (position == m_end) {
-                initialize(position, x);
+                _construct(position, x);
             } else {
-                copy_construct(m_end, move_if_noexcept(*(m_end-1)));
+                _construct(m_end, move_if_noexcept(*(m_end-1)));
                 auto it2 = m_end-1;
                 try {
                     for (; it2 >= position+1; --it2)
-                        move_assign(it2, move_if_noexcept(*(it2-1)));
+                        _assign(it2, move_if_noexcept(*(it2-1)));
 
                     auto insert_it = const_cast<iterator>(position);
-                    move_assign(insert_it, x);
+                    _assign(insert_it, x);
                     
                 } catch(...) {
                     for (; it2 != m_end-1; ++it2)
-                        move_assign(it2-1, move_if_noexcept(*it2));
-                    move_assign(m_end-1, move_if_noexcept(*(m_end)));
-                    allocator_traits<allocator_type>::destroy(m_alloc, m_end);
+                        _assign(it2-1, move_if_noexcept(*it2));
+                    _assign(m_end-1, move_if_noexcept(*(m_end)));
+                    _destroy(m_end);
                     throw;
                 }
             }
@@ -525,17 +613,17 @@ public:
 
             auto insert_it = const_cast<iterator>(position);
             try {
-                //construct the new elements in place in the gap 
+                //_construct the new elements in place in the gap 
                 for (; insert_it != position+n; ++first, ++insert_it)
-                    copy_construct(insert_it, *first);            
+                    _construct(insert_it, *first);            
             } catch(...) {
                 //we will not be needing that gap after all, so let's close it shall we
                 for (auto it = insert_it; it != position; --it)
-                    move_assign(it-1, move_if_noexcept(*(it-1+n)));
+                    _assign(it-1, move_if_noexcept(*(it-1+n)));
                 for (; insert_it != position+n; ++insert_it)
-                    copy_construct(insert_it, move_if_noexcept(*(insert_it+n)));
+                    _construct(insert_it, move_if_noexcept(*(insert_it+n)));
                 for (; insert_it != m_end; ++insert_it)
-                    move_assign(insert_it, move_if_noexcept(*(insert_it+n)));
+                    _assign(insert_it, move_if_noexcept(*(insert_it+n)));
                 throw;
             }
 
@@ -548,38 +636,38 @@ public:
             try  {
                 
                 for (; it != m_end + (n - 1) - nr_elements_to_move; --it)
-                    copy_construct(it, move_if_noexcept(*(it-n))); //move elements into unused space ie:  1) [1 2 3 _ _] -> [1 * * 2 3]     2) [1 2 _ _ _ _] -> [* * _ _ 1 2]
+                    _construct(it, move_if_noexcept(*(it-n))); //move elements into unused space ie:  1) [1 2 3 _ _] -> [1 * * 2 3]     2) [1 2 _ _ _ _] -> [* * _ _ 1 2]
 
                 auto it2 = m_end-1;
                 try {
                     if (n>0)
                         for (; it2 >= position+n; --it2)
-                            move_assign(it2, move_if_noexcept(*(it2-n))); //shift elements in used space 1) [1 * * 2 3] -> [* * 1 2 3]    2) nothing to do
+                            _assign(it2, move_if_noexcept(*(it2-n))); //shift elements in used space 1) [1 * * 2 3] -> [* * 1 2 3]    2) nothing to do
 
                     auto insert_it = const_cast<iterator>(position); //insert the actual data, no need to catch errors in this if it fails it will be overwritten again by what was there before
                     for (; insert_it != position + nr_elements_to_move; ++first, ++insert_it)
-                        copy_assign(insert_it, *first); //assign the actual data we want to insert to non-empty objects 1) [* * 1 2 3] -> [a b 1 2 3] and done, 2) [a b _ _ 1 2]
+                        _assign(insert_it, *first); //_assign the actual data we want to insert to non-empty objects 1) [* * 1 2 3] -> [a b 1 2 3] and done, 2) [a b _ _ 1 2]
 
                     try {
                         for (; insert_it != position+n; ++first, ++insert_it)
-                            copy_construct(insert_it, *first); //construct new objects with the data we want to add in empty spots 1) nothing to do, 2) [a b _ _ 1 2] -> [a b c d 1 2] and done
+                            _construct(insert_it, *first); //_construct new objects with the data we want to add in empty spots 1) nothing to do, 2) [a b _ _ 1 2] -> [a b c d 1 2] and done
                     } catch (...) {
                         for (; insert_it != position + nr_elements_to_move; --insert_it)
-                            allocator_traits<allocator_type>::destroy(m_alloc, insert_it-1);  //if the construction above fails for any reason 1) nothing to do 2) [a b (c) (d) 1 2] -> [a b _ _ 1 2]
+                            _destroy(insert_it-1);  //if the _construction above fails for any reason 1) nothing to do 2) [a b (c) (d) 1 2] -> [a b _ _ 1 2]
                             
                         throw;
                     }                      
 
                 } catch(...) {
                     for (; it2 != m_end-1; ++it2)
-                        move_assign(it2-n, move_if_noexcept(*it2)); //shift back if shift failed 1) [(a) (b) 1 2 3] -> [1 * * 2 3], 2) nothing to do
+                        _assign(it2-n, move_if_noexcept(*it2)); //shift back if shift failed 1) [(a) (b) 1 2 3] -> [1 * * 2 3], 2) nothing to do
                     throw;
                 }
 
             } catch(...) {
                 for (; it != m_end + (n - 1); ++it) {
-                    copy_assign(it-n+1, move_if_noexcept(*(it+1))); //1) [1 * * 2 3] -> [1 2 3 * *], 2) [a b _ _ 1 2] -> [1 2 _ _ * *]
-                    allocator_traits<allocator_type>::destroy(m_alloc, it+1); //delete end 1) [1 2 3 * *] -> [1 2 3 _ _], 2) [1 2 _ _ _ _]
+                    _assign(it-n+1, move_if_noexcept(*(it+1))); //1) [1 * * 2 3] -> [1 2 3 * *], 2) [a b _ _ 1 2] -> [1 2 _ _ * *]
+                    _destroy(it+1); //delete end 1) [1 2 3 * *] -> [1 2 3 _ _], 2) [1 2 _ _ _ _]
                 }
                 throw;
             }
@@ -602,17 +690,17 @@ public:
 
             auto insert_it = const_cast<iterator>(position);
             try {
-                //construct the new elements in place in the gap 
+                //_construct the new elements in place in the gap 
                 for (; insert_it != position+n; ++insert_it)
-                    copy_construct(insert_it, x);            
+                    _construct(insert_it, x);            
             } catch(...) {
                 //we will not be needing that gap after all, so let's close it shall we
                 for (auto it = insert_it; it != position; --it)
-                    move_assign(it-1, move_if_noexcept(*(it-1+n)));
+                    _assign(it-1, move_if_noexcept(*(it-1+n)));
                 for (; insert_it != position+n; ++insert_it)
-                    copy_construct(insert_it, move_if_noexcept(*(insert_it+n)));
+                    _construct(insert_it, move_if_noexcept(*(insert_it+n)));
                 for (; insert_it != m_end; ++insert_it)
-                    move_assign(insert_it, move_if_noexcept(*(insert_it+n)));
+                    _assign(insert_it, move_if_noexcept(*(insert_it+n)));
                 throw;
             }
 
@@ -625,37 +713,37 @@ public:
             try  {
                 
                 for (; it != m_end + (n - 1) - nr_elements_to_move; --it)
-                    copy_construct(it, move_if_noexcept(*(it-n))); //move elements into unused space ie:  1) [1 2 3 _ _] -> [1 * * 2 3]     2) [1 2 _ _ _ _] -> [* * _ _ 1 2]
+                    _construct(it, move_if_noexcept(*(it-n))); //move elements into unused space ie:  1) [1 2 3 _ _] -> [1 * * 2 3]     2) [1 2 _ _ _ _] -> [* * _ _ 1 2]
 
                 auto it2 = m_end-1;
                 try {
                     if (n>0)
                         for (; it2 >= position+n; --it2)
-                            move_assign(it2, move_if_noexcept(*(it2-n))); //shift elements in used space 1) [1 * * 2 3] -> [* * 1 2 3]    2) nothing to do
+                            _assign(it2, move_if_noexcept(*(it2-n))); //shift elements in used space 1) [1 * * 2 3] -> [* * 1 2 3]    2) nothing to do
 
                     auto insert_it = const_cast<iterator>(position); //insert the actual data, no need to catch errors in this if it fails it will be overwritten again by what was there before
                     for (; insert_it != position + nr_elements_to_move; ++insert_it)
-                        copy_assign(insert_it, x); //assign the actual data we want to insert to non-empty objects 1) [* * 1 2 3] -> [a b 1 2 3] and done, 2) [a b _ _ 1 2]
+                        _assign(insert_it, x); //_assign the actual data we want to insert to non-empty objects 1) [* * 1 2 3] -> [a b 1 2 3] and done, 2) [a b _ _ 1 2]
 
                     try {
                         for (; insert_it != position+n; ++insert_it)
-                            copy_construct(insert_it, x); //construct new objects with the data we want to add in empty spots 1) nothing to do, 2) [a b _ _ 1 2] -> [a b c d 1 2] and done
+                            _construct(insert_it, x); //_construct new objects with the data we want to add in empty spots 1) nothing to do, 2) [a b _ _ 1 2] -> [a b c d 1 2] and done
                     } catch (...) {
                         for (; insert_it != position + nr_elements_to_move; --insert_it)
-                            allocator_traits<allocator_type>::destroy(m_alloc, insert_it-1);  //if the construction above fails for any reason 1) nothing to do 2) [a b (c) (d) 1 2] -> [a b _ _ 1 2]
+                            _destroy(insert_it-1);  //if the _construction above fails for any reason 1) nothing to do 2) [a b (c) (d) 1 2] -> [a b _ _ 1 2]
                         throw;
                     }                      
 
                 } catch(...) {
                     for (; it2 != m_end-1; ++it2)
-                        move_assign(it2-n, move_if_noexcept(*it2)); //shift back if shift failed 1) [(a) (b) 1 2 3] -> [1 * * 2 3], 2) nothing to do
+                        _assign(it2-n, move_if_noexcept(*it2)); //shift back if shift failed 1) [(a) (b) 1 2 3] -> [1 * * 2 3], 2) nothing to do
                     throw;
                 }
 
             } catch(...) {
                 for (; it != m_end + (n - 1); ++it) {
-                    copy_assign(it-n+1, move_if_noexcept(*(it+1))); //1) [1 * * 2 3] -> [1 2 3 * *], 2) [a b _ _ 1 2] -> [1 2 _ _ * *]
-                    allocator_traits<allocator_type>::destroy(m_alloc, it+1); //delete end 1) [1 2 3 * *] -> [1 2 3 _ _], 2) [1 2 _ _ _ _]
+                    _assign(it-n+1, move_if_noexcept(*(it+1))); //1) [1 * * 2 3] -> [1 2 3 * *], 2) [a b _ _ 1 2] -> [1 2 _ _ * *]
+                    _destroy(it+1); //delete end 1) [1 2 3 * *] -> [1 2 3 _ _], 2) [1 2 _ _ _ _]
                 }
                 throw;
             }
@@ -671,7 +759,7 @@ public:
         for (iterator it = const_cast<iterator>(position); (it+1) != m_end; ++it)
             *it = std::move_if_noexcept(*(it+1));
         --m_end;
-        allocator_traits<allocator_type>::destroy(m_alloc, m_end);
+        _destroy(m_end);
         return const_cast<iterator>(position);
         
     }
@@ -681,22 +769,45 @@ public:
         for (iterator it = const_cast<iterator>(last); it != m_end; ++it)
             *(it-n) = std::move_if_noexcept(*it);
         for (iterator it = m_end-n; it != m_end; ++it)
-            allocator_traits<allocator_type>::destroy(m_alloc, it);
+            _destroy(it);
         m_end -= n;
         return const_cast<iterator>(last);
     }
-    
-    void swap(vector<T,Allocator>& x) {
+
+private:
+
+    //with alloc propagate
+    void _swap(vector<T,Allocator>& x, true_type) 
+        noexcept( noexcept( std::swap(m_alloc, x.m_alloc) )  && noexcept ( std::swap(m_begin, x.m_begin) ) )
+    {
         std::swap(m_alloc, x.m_alloc);
         std::swap(m_begin, x.m_begin);
         std::swap(m_end, x.m_end);
         std::swap(m_memory_end, x.m_memory_end);
     }
+
+    //without alloc propagate
+    void _swap(vector<T,Allocator>& x, false_type) 
+        noexcept( noexcept( std::swap(m_begin, x.m_begin) ) )
+    {
+        std::swap(m_begin, x.m_begin);
+        std::swap(m_end, x.m_end);
+        std::swap(m_memory_end, x.m_memory_end);
+    }
+
+public:
+
+    
+    void swap(vector<T,Allocator>& x) 
+        noexcept( noexcept(_swap(x, integral_constant<bool, allocator_traits<allocator_type>::propagate_on_container_swap::value>()) ) )  
+    {
+        _swap(x, integral_constant<bool, allocator_traits<allocator_type>::propagate_on_container_swap::value>() );
+    }
     
     
     void clear() noexcept {
         for (auto it = m_begin; it != m_end; ++it)
-            allocator_traits<allocator_type>::destroy(m_alloc, it);
+            _destroy(it);
         m_alloc.deallocate(m_begin, capacity());
         m_begin = m_end = m_memory_end = nullptr;
     }
@@ -735,7 +846,7 @@ bool operator<=(const vector<T,Allocator>& x, const vector<T,Allocator>& y) {
 
 // 23.3.6.6, specialized algorithms:
 template <class T, class Allocator>
-void swap(vector<T,Allocator>& x, vector<T,Allocator>& y) {
+void swap(vector<T,Allocator>& x, vector<T,Allocator>& y) noexcept( noexcept( x.swap(y) ) ){
     x.swap(y);
 }
 
