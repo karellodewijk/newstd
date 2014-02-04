@@ -106,7 +106,7 @@ private:
 public:
 
 // 23.3.5.2, construct/copy/destroy:
-    explicit list(const Allocator& alloc = Allocator()) : m_alloc(alloc), m_size(0), m_head{&m_head, &m_head} {}
+    explicit list(const Allocator& alloc = Allocator()) noexcept : m_alloc(alloc), m_size(0), m_head{&m_head, &m_head} {}
     
     explicit list(size_type n) : list(Allocator()) {
         for (size_type i = 0; i < n; ++i) 

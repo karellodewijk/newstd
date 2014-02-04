@@ -1,12 +1,13 @@
 #ifndef STL_VECTOR_H
 #define STL_VECTOR_H
 
-#include "algorithm"
 #include <memory>
 #include <cstring>
 #include <cmath>
 #include <initializer_list>
 #include <stdexcept>
+#include <limits>
+#include "algorithm" //if it does not compile with stdlibc++, remove this include
 
 
 namespace std {
@@ -69,7 +70,7 @@ class vector {
     }
 
     //Either copy n x T from begin to dst or if that fails, destroy everything copied so far, deallocate dest and throw 
-    void copy_or_cleanup(T* const & dest, size_type alloc_size) {
+    void copy_or_cleanup(pointer const & dest, size_type alloc_size) {
         size_type i = 0;
         try {
             for (; i < size(); ++i)
@@ -92,7 +93,7 @@ class vector {
     
     //Either copy [m_begin, position) to dest and [position, position+gap_size) to dest+(position-m_begin)+gap_size or destroy everything copied so far, deallocate dest and throw
     //or in human words copy the vector to dest but leave a gap_size gap before position
-    void copy_or_cleanup_with_gap(T* const & dest, size_type alloc_size,  const T* position, size_type gap_size) {
+    void copy_or_cleanup_with_gap(pointer const & dest, size_type alloc_size, const_iterator position, size_type gap_size) {
         iterator src = m_begin, dst = dest;
         
         try {
@@ -162,9 +163,9 @@ class vector {
 public:
 
 // 23.3.6.2, _construct/copy/destroy:
-    explicit vector(const Allocator& alloc = Allocator()) : m_begin(nullptr), m_end(nullptr), m_memory_end(nullptr), m_alloc(alloc) {}
+    explicit vector(const Allocator& alloc = Allocator()) noexcept : m_begin(nullptr), m_end(nullptr), m_memory_end(nullptr), m_alloc(alloc) {}
     
-    explicit vector(size_type n) : m_alloc(Allocator()), m_begin(m_alloc.allocate(n)), m_end(m_begin+n), m_memory_end(m_end) {
+    explicit vector(size_type n) : m_begin(m_alloc.allocate(n)), m_end(m_begin+n), m_memory_end(m_end) {
         construct_or_cleanup();
     }    
     
@@ -199,11 +200,10 @@ public:
 
     vector(const vector& x, const Allocator& alloc) : vector(x.begin(), x.end(), alloc) {}
     
-    vector(const vector<T,Allocator>& x) : vector(x, allocator_traits<allocator_type>::select_on_container_copy__construction(x.get_allocator())) {}
+    vector(const vector<T,Allocator>& x) : vector(x, allocator_traits<allocator_type>::select_on_container_copy_construction(x.get_allocator())) {}
         
     vector(vector&& x, const Allocator& alloc) 
-        noexcept(is_nothrow_copy_constructible<allocator_type>::value
-              && is_nothrow_constructible<pointer, typename decltype(x)::pointer>::value
+        noexcept(is_nothrow_copy_constructible<pointer>::value
               && noexcept(x.m_begin = nullptr)) 
         
         : m_alloc(alloc), m_begin(x.m_begin), m_end(x.m_end), m_memory_end(x.m_memory_end) 
@@ -214,8 +214,7 @@ public:
     }
 
     vector(vector&& x)  
-        noexcept(is_nothrow_move_constructible<allocator_type>::value
-              && is_nothrow_constructible<pointer, typename decltype(x)::pointer>::value
+        noexcept(is_nothrow_copy_constructible<pointer>::value
               && noexcept(x.m_begin = nullptr)) 
         
         : m_alloc(std::move(x.get_allocator())), m_begin(x.m_begin), m_end(x.m_end), m_memory_end(x.m_memory_end) 
@@ -378,7 +377,7 @@ public:
     
 // 23.3.6.3, capacity:
     size_type size() const noexcept { return m_end - m_begin; }
-    size_type max_size() const noexcept { return std::min(size_type(-1)/sizeof(T), m_alloc.max_size()); }  
+    size_type max_size() const noexcept { return allocator_traits<allocator_type>::max_size(m_alloc); }  
     
     void resize(size_type sz) {
         if (sz > size()) {
@@ -417,13 +416,13 @@ public:
     }
     
     size_type capacity() const noexcept { return m_memory_end - m_begin; }
-    bool empty() const noexcept { m_begin == m_end; }
+    bool empty() const noexcept { return m_begin == m_end; }
     
     void reserve(size_type n) {
         if (capacity() < n) {
             if (n > max_size())
                 throw length_error("Reserve size exceeds maximum capacity");
-            T* tmp = m_alloc.allocate(n, m_memory_end);
+            pointer tmp = m_alloc.allocate(n, m_memory_end);
             copy_or_cleanup(tmp, n);
         }
     }
@@ -431,7 +430,7 @@ public:
     void shrink_to_fit() {
         if (m_end != m_memory_end) {
             if (size() != 0) {
-                T* tmp = m_alloc.allocate(size(), m_begin);
+                pointer tmp = m_alloc.allocate(size(), m_begin);
                 copy_or_cleanup(tmp, size());
             } else {
                 m_alloc.deallocate(m_begin, capacity());
@@ -464,8 +463,8 @@ public:
     const_reference back() const{ return *(m_end-1); }
 
 // 23.3.6.4, data access
-    T* data() noexcept { return m_begin; }
-    const T* data() const noexcept { return m_begin; }
+    pointer data() noexcept { return m_begin; }
+    const pointer data() const noexcept { return m_begin; }
     
 // 23.3.6.5, modifiers:
     template <class... Args> void emplace_back(Args&&... args) {
@@ -486,12 +485,12 @@ public:
             size_type alloc_size = std::max(size_type(MIN_CAPACITY), size_type(std::round(size() * GROWTH_RATIO))); //largest of min_capacity or size()+n or size()*growth_ratio
             if (alloc_size > max_size())
                 throw length_error("Reserve size exceeds maximum capacity");
-            T* tmp = m_alloc.allocate(alloc_size, m_memory_end);
+            pointer tmp = m_alloc.allocate(alloc_size, m_memory_end);
             size_type position_offset = position-m_begin;
             copy_or_cleanup_with_gap(tmp, alloc_size, position, 1);
             position = m_begin + position_offset;
 
-            auto insert_it = const_cast<iterator>(position);
+            auto insert_it = m_begin + (position-m_begin);
             try {
                 _construct(insert_it, std::forward<Args>(args)...);            
             } catch(...) {
@@ -513,7 +512,7 @@ public:
                     for (; it2 >= position+1; --it2)
                         _assign(it2, move_if_noexcept(*(it2-1)));
 
-                    auto insert_it = const_cast<iterator>(position);
+                    auto insert_it = m_begin + (position-m_begin);
                     try {
                         _destroy(insert_it);
                         _construct(insert_it, std::forward<Args>(args)...);
@@ -533,7 +532,7 @@ public:
             }
         }        
         ++m_end;
-        return const_cast<iterator>(position);
+        return m_begin + (position-m_begin);
     }
 
     iterator insert(const_iterator position, const T& x) {
@@ -542,12 +541,12 @@ public:
             size_type alloc_size = std::max(size_type(MIN_CAPACITY), size_type(std::round(size() * GROWTH_RATIO))); //largest of min_capacity or size()+n or size()*growth_ratio
             if (alloc_size > max_size())
                 throw length_error("Reserve size exceeds maximum capacity");
-            T* tmp = m_alloc.allocate(alloc_size, m_memory_end);
+            pointer tmp = m_alloc.allocate(alloc_size, m_memory_end);
             size_type position_offset = position-m_begin;
             copy_or_cleanup_with_gap(tmp, alloc_size, position, 1);
             position = m_begin + position_offset;
 
-            auto insert_it = const_cast<iterator>(position);
+            auto insert_it = m_begin + (position-m_begin);
             try {
                 _construct(insert_it, x);            
             } catch(...) {
@@ -569,7 +568,7 @@ public:
                     for (; it2 >= position+1; --it2)
                         _assign(it2, move_if_noexcept(*(it2-1)));
 
-                    auto insert_it = const_cast<iterator>(position);
+                    auto insert_it = m_begin + (position-m_begin);
                     _assign(insert_it, x);
                     
                 } catch(...) {
@@ -582,7 +581,7 @@ public:
             }
         }        
         ++m_end;
-        return const_cast<iterator>(position);
+        return m_begin + (position-m_begin);
     }
     
     iterator insert(const_iterator position, T&& x) { return insert(position, x); }
@@ -606,12 +605,12 @@ public:
             size_type alloc_size = std::max(std::max(size() + n, size_type(MIN_CAPACITY)), size_type(std::round(size() * GROWTH_RATIO))); //largest of min_capacity or size()+n or size()*growth_ratio
             if (alloc_size > max_size())
                 throw length_error("Reserve size exceeds maximum capacity");
-            T* tmp = m_alloc.allocate(alloc_size, m_memory_end);
+            pointer tmp = m_alloc.allocate(alloc_size, m_memory_end);
             size_type position_offset = position-m_begin;
             copy_or_cleanup_with_gap(tmp, alloc_size, position, n);
             position = m_begin + position_offset;
 
-            auto insert_it = const_cast<iterator>(position);
+            auto insert_it = m_begin + (position-m_begin);
             try {
                 //_construct the new elements in place in the gap 
                 for (; insert_it != position+n; ++first, ++insert_it)
@@ -644,7 +643,7 @@ public:
                         for (; it2 >= position+n; --it2)
                             _assign(it2, move_if_noexcept(*(it2-n))); //shift elements in used space 1) [1 * * 2 3] -> [* * 1 2 3]    2) nothing to do
 
-                    auto insert_it = const_cast<iterator>(position); //insert the actual data, no need to catch errors in this if it fails it will be overwritten again by what was there before
+                    auto insert_it = m_begin + (position-m_begin); //insert the actual data, no need to catch errors in this if it fails it will be overwritten again by what was there before
                     for (; insert_it != position + nr_elements_to_move; ++first, ++insert_it)
                         _assign(insert_it, *first); //_assign the actual data we want to insert to non-empty objects 1) [* * 1 2 3] -> [a b 1 2 3] and done, 2) [a b _ _ 1 2]
 
@@ -674,7 +673,7 @@ public:
         }
         
         m_end += n;
-        return const_cast<iterator>(position);
+        return m_begin + (position-m_begin);
     }
 
     iterator insert(const_iterator position, size_type n, const T& x) {        
@@ -683,12 +682,12 @@ public:
             size_type alloc_size = std::max(std::max(size() + n, size_type(MIN_CAPACITY)), size_type(std::round(size() * GROWTH_RATIO))); //largest of min_capacity or size()+n or size()*growth_ratio
             if (alloc_size > max_size())
                 throw length_error("Reserve size exceeds maximum capacity");
-            T* tmp = m_alloc.allocate(alloc_size, m_memory_end);
+            pointer tmp = m_alloc.allocate(alloc_size, m_memory_end);
             size_type position_offset = position-m_begin;
             copy_or_cleanup_with_gap(tmp, alloc_size, position, n);
             position = m_begin + position_offset;
 
-            auto insert_it = const_cast<iterator>(position);
+            auto insert_it = m_begin + (position-m_begin);
             try {
                 //_construct the new elements in place in the gap 
                 for (; insert_it != position+n; ++insert_it)
@@ -721,7 +720,7 @@ public:
                         for (; it2 >= position+n; --it2)
                             _assign(it2, move_if_noexcept(*(it2-n))); //shift elements in used space 1) [1 * * 2 3] -> [* * 1 2 3]    2) nothing to do
 
-                    auto insert_it = const_cast<iterator>(position); //insert the actual data, no need to catch errors in this if it fails it will be overwritten again by what was there before
+                    auto insert_it = m_begin + (position-m_begin); //insert the actual data, no need to catch errors in this if it fails it will be overwritten again by what was there before
                     for (; insert_it != position + nr_elements_to_move; ++insert_it)
                         _assign(insert_it, x); //_assign the actual data we want to insert to non-empty objects 1) [* * 1 2 3] -> [a b 1 2 3] and done, 2) [a b _ _ 1 2]
 
@@ -750,28 +749,28 @@ public:
         }
         
         m_end += n;
-        return const_cast<iterator>(position);
+        return m_begin + (position-m_begin);
     }
     
     iterator insert(const_iterator position, initializer_list<T> il) { insert(position, il.begin(), il.end()); }
 
     iterator erase(const_iterator position) {
-        for (iterator it = const_cast<iterator>(position); (it+1) != m_end; ++it)
+        for (iterator it = m_begin + (position-m_begin); (it+1) != m_end; ++it)
             *it = std::move_if_noexcept(*(it+1));
         --m_end;
         _destroy(m_end);
-        return const_cast<iterator>(position);
+        return m_begin + (position-m_begin);
         
     }
     
     iterator erase(const_iterator first, const_iterator last) {
         size_type n = std::distance(first, last);
-        for (iterator it = const_cast<iterator>(last); it != m_end; ++it)
+        for (iterator it = m_begin + (last-m_begin); it != m_end; ++it)
             *(it-n) = std::move_if_noexcept(*it);
         for (iterator it = m_end-n; it != m_end; ++it)
             _destroy(it);
         m_end -= n;
-        return const_cast<iterator>(last);
+        return m_begin + (last-m_begin);
     }
 
 private:
