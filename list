@@ -28,7 +28,7 @@ class list {
         T m_value;
     };
     
-    typedef typename Allocator::template rebind<Node>::other Node_allocator_type;
+    typedef typename allocator_traits<Allocator>::template rebind_alloc<Node> Node_allocator_type;
     
     Node_allocator_type m_alloc;
     Node_base m_head;
@@ -95,38 +95,50 @@ class list {
     typedef typename list_iterator<T>::size_type size_type; // see 23.2
     typedef typename list_iterator<T>::difference_type difference_type;// see 23.2
     typedef Allocator allocator_type;
-    typedef typename allocator_traits<Allocator>::pointer pointer;
-    typedef typename allocator_traits<Allocator>::const_pointer const_pointer;
+    typedef typename allocator_traits<allocator_type>::pointer pointer;
+    typedef typename allocator_traits<allocator_type>::const_pointer const_pointer;
     typedef std::reverse_iterator<iterator> reverse_iterator;
     typedef std::reverse_iterator<const_iterator> const_reverse_iterator;
 
 private:
     size_type m_size;
 
+    template <class... Args>  
+    inline void _construct(Node* const & dest, Args&&... args) {
+         allocator_traits<Node_allocator_type>::construct(m_alloc, &*dest, std::forward<Args>(args)...);
+    }
+
+    inline void _destroy(Node* const & dest) {
+        allocator_traits<Node_allocator_type>::destroy(m_alloc, &*dest);
+    }
+
 public:
 
 // 23.3.5.2, construct/copy/destroy:
-    explicit list(const Allocator& alloc = Allocator()) noexcept : m_alloc(alloc), m_size(0), m_head{&m_head, &m_head} {}
-    
-    explicit list(size_type n) : list(Allocator()) {
+    explicit list() noexcept(is_nothrow_default_constructible<allocator_type>::value) : m_size(0), m_head{&m_head, &m_head} {}
+
+    explicit list(const allocator_type& alloc) : m_alloc(alloc), m_size(0), m_head{&m_head, &m_head} {}
+  
+    explicit list(size_type n) : m_size(0), m_head{&m_head, &m_head} {
         for (size_type i = 0; i < n; ++i) 
             emplace_front();
     }
     
-    list(size_type n, const T& value, const Allocator& alloc = Allocator()) : list(alloc) {
+    list(size_type n, const T& value, const allocator_type& alloc = allocator_type()) : list(alloc) {
         for (size_type i = 0; i < n; ++i) 
             emplace_front(value);
     }
     
     template <class InputIterator>
-    list(InputIterator first, InputIterator last, const Allocator& alloc = Allocator()) : list(alloc) {
+    list(InputIterator first, InputIterator last, const allocator_type& alloc = allocator_type()) : list(alloc) {
         for (auto it = first; it != last; ++it)
             emplace_back(*it);
     }
     
-    list(const list<T,Allocator>& x) : list(x.begin(), x.end(), x.get_allocator()) {}
-    
-    list(list&& x, const Allocator& alloc) : m_alloc(alloc), m_head(x.m_head), m_size(x.m_size) {    
+    list(const list<T,allocator_type>& x) : list(x.begin(), x.end(), allocator_traits<allocator_type>::select_on_container_copy_construction(x.get_allocator())) {}
+
+private:
+    inline void list_move_impl(list&& x) {
         if (m_head.m_next == m_head.m_previous) { //x was actually empty
             m_head.m_next = m_head.m_previous = &m_head;
             return;
@@ -135,18 +147,22 @@ public:
         m_head.m_previous->m_next = &m_head;
         x.m_head.m_next = &x.m_head; 
         x.m_head.m_previous = &x.m_head;
-        x.m_size = 0;
-    }
+        x.m_size = 0;    
+    } 
+
+public:
     
-    list(list&& x) : list(std::forward<list&&>(x), x.get_allocator()) {}
+    list(list&& x, const allocator_type& alloc) noexcept : m_alloc(alloc), m_head(x.m_head), m_size(x.m_size) { list_move_impl(forward<list&&>(x)); }
     
-    list(const list& x, const Allocator& alloc) : list(x.begin(), x.end(), alloc) {}
+    list(list&& x) noexcept : m_alloc(move(x.get_allocator())), m_head(x.m_head), m_size(x.m_size) {list_move_impl(forward<list&&>(x));}
     
-    list(initializer_list<T> x, const Allocator& alloc = Allocator()) : list(x.begin(), x.end(), alloc) {}
+    list(const list& x, const allocator_type& alloc) : list(x.begin(), x.end(), alloc) {}
+    
+    list(initializer_list<T> x, const allocator_type& alloc = allocator_type()) : list(x.begin(), x.end(), alloc) {}
 
     ~list() { clear(); }
 
-    list<T,Allocator>& operator=(const list<T,Allocator>& x) {
+    list<T,allocator_type>& operator=(const list<T,allocator_type>& x) noexcept {
         assign(x.begin(), x.end());
         return *this;
     }
@@ -156,7 +172,7 @@ public:
         return *this;
     }
     
-    list<T,Allocator>& operator=(list<T,Allocator>&& x) {
+    list<T,allocator_type>& operator=(list<T,allocator_type>&& x) noexcept {
         clear();
         
         if (x.size() != 0) {       
@@ -253,7 +269,7 @@ public:
     template <class... Args> void emplace_front(Args&&... args) {
         Node* node = m_alloc.allocate(1, m_head.m_next);
         try {
-            m_alloc.construct(node, m_head.m_next, &m_head, std::forward<Args&&>(args)...);
+            _construct(node, m_head.m_next, &m_head, std::forward<Args&&>(args)...);
         } catch(...) {
             m_alloc.deallocate(node, 1);
             throw;
@@ -275,7 +291,7 @@ public:
     template <class... Args> void emplace_back(Args&&... args) {
         Node* node = m_alloc.allocate(1, m_head.m_previous);
         try {
-            m_alloc.construct(node, &m_head, m_head.m_previous, std::forward<Args&&>(args)...);
+            _construct(node, &m_head, m_head.m_previous, std::forward<Args&&>(args)...);
         } catch(...) {
             m_alloc.deallocate(node, 1);
             throw;
@@ -302,7 +318,7 @@ public:
     template <class... Args> iterator emplace(const_iterator position, Args&&... args) {
         Node* node = m_alloc.allocate(1, position.m_node);
         try {
-            m_alloc.construct(node, position.m_node->m_previous, position.m_node, std::forward<Args&&>(args)...);
+            _construct(node, position.m_node->m_previous, position.m_node, std::forward<Args&&>(args)...);
         } catch(...) {
             m_alloc.deallocate(node, 1);
             throw;
@@ -332,7 +348,7 @@ public:
         position.m_node->m_previous->m_next = position.m_node->m_next;
         position.m_node->m_next->m_previous = position.m_node->m_previous;
         Node_base* next_node = position.m_node->m_next;
-        m_alloc.destroy(static_cast<Node*>(position.m_node));
+        _destroy(static_cast<Node*>(position.m_node));
         m_alloc.deallocate(static_cast<Node*>(position.m_node), 1);
         --m_size;
         return iterator(next_node);          
@@ -345,15 +361,23 @@ public:
         while (position != last) {
             Node* node_to_destroy = static_cast<Node*>(position.m_node);
             ++position;
-            m_alloc.destroy(node_to_destroy);
+            _destroy(node_to_destroy);
             m_alloc.deallocate(node_to_destroy, 1);
             --m_size;
         }
         
         return iterator(last.m_node);
     }
+
+private:
+
+    inline void _swap_allocators(list<T,allocator_type>& x, true_type) { std::swap(m_alloc, x.m_alloc); }
+    inline void _swap_allocators(list<T,allocator_type>& x, false_type) {}
+
+public:
        
-    void swap(list<T,Allocator>& x) {
+    void swap(list<T,allocator_type>& x) noexcept {
+        _swap_allocators(x, integral_constant<bool, allocator_traits<allocator_type>::propagate_on_container_swap::value>());
         m_head.m_previous->m_next = &x.m_head;
         m_head.m_next->m_previous = &x.m_head;
         x.m_head.m_previous->m_next = &m_head;
@@ -410,7 +434,7 @@ private:
     }
 
 public:
-    void splice(const_iterator position, list<T,Allocator>& x, const_iterator first, const_iterator last) noexcept {  //O(1) when x == *this else O(n)
+    void splice(const_iterator position, list<T,allocator_type>& x, const_iterator first, const_iterator last) noexcept {  //O(1) when x == *this else O(n)
         if (&x.m_head == &m_head) { //address of the head node uniquely identifies a list
             if (first != last)
                 splice_range(position, first, last);
@@ -423,18 +447,18 @@ public:
         }
     }
     
-    void splice(const_iterator position, list<T,Allocator>&& x, const_iterator first, const_iterator last) noexcept { splice(position, std::move(x), first, last); } //O(1) when x == *this else O(n)      
+    void splice(const_iterator position, list<T,allocator_type>&& x, const_iterator first, const_iterator last) noexcept { splice(position, std::move(x), first, last); } //O(1) when x == *this else O(n)      
 
-    void splice(const_iterator position, list<T,Allocator>& x) noexcept { //O(1)
+    void splice(const_iterator position, list<T,allocator_type>& x) noexcept { //O(1)
         splice_range(position, x.begin(), x.end()); 
         m_size += x.m_size;
 
         x.m_size = 0;
     }
     
-    void splice(const_iterator position, list<T,Allocator>&& x) noexcept { splice(position, std::move(x)); } //O(1)
+    void splice(const_iterator position, list<T,allocator_type>&& x) noexcept { splice(position, std::move(x)); } //O(1)
 
-    void splice(const_iterator position, list<T,Allocator>& x, const_iterator i) noexcept {
+    void splice(const_iterator position, list<T,allocator_type>& x, const_iterator i) noexcept {
         if (&x.m_head == &m_head) { //address of the head node uniquely identifies a list
             splice_node(position, i);
         } else {
@@ -444,7 +468,7 @@ public:
         }
     }
     
-    void splice(const_iterator position, list<T,Allocator>&& x, const_iterator i) noexcept { splice(position, std::move(x), i); } //O(1)
+    void splice(const_iterator position, list<T,allocator_type>&& x, const_iterator i) noexcept { splice(position, std::move(x), i); } //O(1)
 
     template <class Predicate> void remove_if(Predicate pred) {
         for (auto it = cbegin(); it != end();) {
@@ -475,7 +499,7 @@ public:
     void unique() { unique(std::equal_to<const T&>()); }
     
 
-    template <class Compare> void merge(list<T,Allocator>& x, Compare comp) {
+    template <class Compare> void merge(list<T,allocator_type>& x, Compare comp) {
         if (x.m_size == 0) {
             return;
         } else if (m_size == 0) {
@@ -518,9 +542,9 @@ public:
         }
     }
 
-    template <class Compare> void merge(list<T,Allocator>&& x, Compare comp) { merge(std::move(x), comp); }   
-    void merge(list<T,Allocator>& x) { merge(x, std::less<value_type>()); }
-    void merge(list<T,Allocator>&& x) { merge(std::move(x)); }
+    template <class Compare> void merge(list<T,allocator_type>&& x, Compare comp) { merge(std::move(x), comp); }   
+    void merge(list<T,allocator_type>& x) { merge(x, std::less<value_type>()); }
+    void merge(list<T,allocator_type>&& x) { merge(std::move(x)); }
     
     void reverse() noexcept {
         for (auto it = begin(); it != end(); --it) //can you figure out why I do --it
@@ -598,7 +622,7 @@ public:
         //I've taken a look at how Tim implemented it, he uses some bit shifting, not sure which would be faster
         //neither will make much of an impact though 
         
-        list<list<T,Allocator> > merge_stack;        
+        list<list<T,allocator_type> > merge_stack;        
         iterator last, current = begin();
 
         do { //we already know we have at least minrun els as we checked at the beginning
@@ -701,7 +725,7 @@ public:
         //we cut the list in half
         auto half = begin();
         for (size_type i = 0; i < size()/2.0-1; ++i) ++half;
-        list<T,Allocator> list2;
+        list<T,allocator_type> list2;
         list2.m_head.m_next = half.m_node->m_next;
         list2.m_head.m_previous = m_head.m_previous;     
         m_head.m_previous->m_next = &list2.m_head;
@@ -758,7 +782,7 @@ bool operator<=(const list<T,Allocator>& x, const list<T,Allocator>& y) {
 
 // specialized algorithms:
 template <class T, class Allocator>
-void swap(list<T,Allocator>& x, list<T,Allocator>& y) {
+void swap(list<T,Allocator>& x, list<T,Allocator>& y) noexcept( noexcept( x.swap(y) ) ) {
     x.swap(y);
 }
 

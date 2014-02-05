@@ -163,12 +163,18 @@ class vector {
 public:
 
 // 23.3.6.2, _construct/copy/destroy:
-    explicit vector(const Allocator& alloc = Allocator()) noexcept : m_begin(nullptr), m_end(nullptr), m_memory_end(nullptr), m_alloc(alloc) {}
+    explicit vector() noexcept(is_nothrow_default_constructible<allocator_type>::value) : m_begin(nullptr), m_end(nullptr), m_memory_end(nullptr) {}
+    
+    explicit vector(const Allocator& alloc) : m_begin(nullptr), m_end(nullptr), m_memory_end(nullptr), m_alloc(alloc) {}
     
     explicit vector(size_type n) : m_begin(m_alloc.allocate(n)), m_end(m_begin+n), m_memory_end(m_end) {
         construct_or_cleanup();
     }    
-    
+
+    explicit vector(size_type n, const Allocator& alloc) : m_alloc(alloc), m_begin(m_alloc.allocate(n)), m_end(m_begin+n), m_memory_end(m_end) {
+        construct_or_cleanup();
+    }    
+        
     vector(size_type n, const T& value, const Allocator& alloc = Allocator()) : m_alloc(alloc), m_begin(m_alloc.allocate(n)), m_end(m_begin+n), m_memory_end(m_end) {
         construct_or_cleanup(value);
     }
@@ -231,8 +237,8 @@ public:
 private:
     //with alloc propagate
     void copy_assign(const vector<T,Allocator>& x, true_type) {
-        clear(); //we can not reuse the memory since the allocator state might change
-        m_alloc = allocator_traits<allocator_type>::select_on_container_copy__construction(x.get_allocator());
+        clear(); //we can not reuse the memory because it might be tied to the allocator we're overwriting
+        m_alloc = allocator_traits<allocator_type>::select_on_container_copy_construction(x.get_allocator());
         m_alloc.allocate(m_begin, x.size());
         m_memory_end = m_end = m_begin + x.size();
         construct_or_cleanup(x.begin(), x.end());
@@ -257,7 +263,6 @@ private:
         )
     {
         //steal data
-        m_alloc = allocator_traits<allocator_type>::select_on_container_copy_construction(x.get_allocator());
         m_begin = x.m_begin;
         m_end = x.m_end;
         m_memory_end = x.m_memory_end;
@@ -270,12 +275,12 @@ private:
 
     //with alloc propagate
     void move_assign(vector<T,Allocator>&& x, true_type) 
-        noexcept( noexcept(m_alloc = allocator_traits<allocator_type>::select_on_container_copy_construction(x.get_allocator()))
+        noexcept( noexcept(m_alloc = move(x.get_allocator()))
                && noexcept(move_assign_impl(move(x))) 
         )
     {
         clear();
-        m_alloc = allocator_traits<allocator_type>::select_on_container_copy_construction(x.get_allocator());
+        m_alloc = move(x.get_allocator());
         move_assign_impl(move(x));
     }
 
@@ -295,7 +300,7 @@ public:
         move_assign(move(x), integral_constant<bool, allocator_traits<allocator_type>::propagate_on_container_move_assignment::value>());
         return *this;     
     }
-        
+
     vector& operator=(initializer_list<T> x) {
         assign(x);
         return *this;
@@ -775,35 +780,21 @@ public:
 
 private:
 
-    //with alloc propagate
-    void _swap(vector<T,Allocator>& x, true_type) 
-        noexcept( noexcept( std::swap(m_alloc, x.m_alloc) )  && noexcept ( std::swap(m_begin, x.m_begin) ) )
-    {
-        std::swap(m_alloc, x.m_alloc);
-        std::swap(m_begin, x.m_begin);
-        std::swap(m_end, x.m_end);
-        std::swap(m_memory_end, x.m_memory_end);
-    }
-
-    //without alloc propagate
-    void _swap(vector<T,Allocator>& x, false_type) 
-        noexcept( noexcept( std::swap(m_begin, x.m_begin) ) )
-    {
-        std::swap(m_begin, x.m_begin);
-        std::swap(m_end, x.m_end);
-        std::swap(m_memory_end, x.m_memory_end);
-    }
+    inline void _swap_allocators(vector<T,Allocator>& x, true_type) noexcept { std::swap(m_alloc, x.m_alloc); }
+    inline void _swap_allocators(vector<T,Allocator>& x, false_type) noexcept {}
 
 public:
 
     
     void swap(vector<T,Allocator>& x) 
-        noexcept( noexcept(_swap(x, integral_constant<bool, allocator_traits<allocator_type>::propagate_on_container_swap::value>()) ) )  
+        noexcept( noexcept ( std::swap(m_begin, x.m_begin) ) )  
     {
-        _swap(x, integral_constant<bool, allocator_traits<allocator_type>::propagate_on_container_swap::value>() );
+        _swap_allocators(x, integral_constant<bool, allocator_traits<allocator_type>::propagate_on_container_swap::value>() );
+        std::swap(m_begin, x.m_begin);
+        std::swap(m_end, x.m_end);
+        std::swap(m_memory_end, x.m_memory_end);
     }
-    
-    
+      
     void clear() noexcept {
         for (auto it = m_begin; it != m_end; ++it)
             _destroy(it);
@@ -845,7 +836,7 @@ bool operator<=(const vector<T,Allocator>& x, const vector<T,Allocator>& y) {
 
 // 23.3.6.6, specialized algorithms:
 template <class T, class Allocator>
-void swap(vector<T,Allocator>& x, vector<T,Allocator>& y) noexcept( noexcept( x.swap(y) ) ){
+void swap(vector<T,Allocator>& x, vector<T,Allocator>& y) noexcept( noexcept( x.swap(y) ) ) {
     x.swap(y);
 }
 
