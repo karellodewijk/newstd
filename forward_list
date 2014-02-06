@@ -5,7 +5,6 @@
 #include <functional>
 #include <cmath>
 #include <iterator>
-#include <iostream>
 
 namespace std {
 
@@ -370,14 +369,14 @@ public:
         
     }  
 
-    void debug() {
-        std::cout << "head: address(" << &m_head<< ") next(" << m_head.m_next << ")" << std::endl;
-        for (auto it = begin(); it != end(); ++it) {
-            Node* node = static_cast<Node*>(it.m_node);
-            std::cout << "node: value(" << node->m_value << ") address(" << node << ") next(" << node->m_next << ")" << std::endl;
-        }
-        std::cout << std::endl;
-    }
+//    void debug() {
+//        std::cout << "head: address(" << &m_head<< ") next(" << m_head.m_next << ")" << std::endl;
+//        for (auto it = begin(); it != end(); ++it) {
+//            Node* node = static_cast<Node*>(it.m_node);
+//            std::cout << "node: value(" << node->m_value << ") address(" << node << ") next(" << node->m_next << ")" << std::endl;
+//        }
+//        std::cout << std::endl;
+//    }
 
     void remove(const T& value) {
         remove_if([&value] (const T& other) { return other == value; } );

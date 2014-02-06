@@ -2,18 +2,31 @@
 #define STL_ALGORITHM_H
 
 #include <initializer_list>
-#include <iterator>
 #include <utility>
+#include <functional>
+#include "vector"
 
 namespace std {
 
 // 25.2, non-modifying sequence operations:
 template <class InputIterator, class Predicate>
-bool all_of(InputIterator first, InputIterator last, Predicate pred);
+bool all_of(InputIterator first, InputIterator last, Predicate pred) {
+    for (; first != last; ++first)
+        if (!pred(*first)) return false;
+    return true;
+}
+    
 template <class InputIterator, class Predicate>
-bool any_of(InputIterator first, InputIterator last, Predicate pred);
+bool any_of(InputIterator first, InputIterator last, Predicate pred) {
+    for (; first != last; ++first)
+        if (pred(*first)) return true;
+    return false;    
+}
+
 template <class InputIterator, class Predicate>
-bool none_of(InputIterator first, InputIterator last, Predicate pred);
+bool none_of(InputIterator first, InputIterator last, Predicate pred) {
+    return !any_of(first, last, pred);
+}
 
 template <class Iterator, class Function>
 inline Function for_each(Iterator first, Iterator last, Function f) {
@@ -22,29 +35,116 @@ inline Function for_each(Iterator first, Iterator last, Function f) {
     return move(f);
 }
 
-template<class InputIterator, class T>
-InputIterator find(InputIterator first, InputIterator last, const T& value);
 template<class InputIterator, class Predicate>
-InputIterator find_if(InputIterator first, InputIterator last, Predicate pred);
-template<class InputIterator, class Predicate>
-InputIterator find_if_not(InputIterator first, InputIterator last, Predicate pred);
-template<class ForwardIterator1, class ForwardIterator2>
-ForwardIterator1 find_end(ForwardIterator1 first1, ForwardIterator1 last1, ForwardIterator2 first2, ForwardIterator2 last2);
-template<class ForwardIterator1, class ForwardIterator2, class BinaryPredicate>
-ForwardIterator1 find_end(ForwardIterator1 first1, ForwardIterator1 last1, ForwardIterator2 first2, ForwardIterator2 last2, BinaryPredicate pred);
-template<class InputIterator, class ForwardIterator>
-InputIterator find_first_of(InputIterator first1, InputIterator last1, ForwardIterator first2, ForwardIterator last2);
-template<class InputIterator, class ForwardIterator, class BinaryPredicate>
-InputIterator find_first_of(InputIterator first1, InputIterator last1, ForwardIterator first2, ForwardIterator last2, BinaryPredicate pred);
-template<class ForwardIterator>
-ForwardIterator adjacent_find(ForwardIterator first, ForwardIterator last);
-template<class ForwardIterator, class BinaryPredicate>
-ForwardIterator adjacent_find(ForwardIterator first, ForwardIterator last, BinaryPredicate pred);
+InputIterator find_if(InputIterator first, InputIterator last, Predicate pred) {
+    for (; first != last; ++first)
+        if (pred(*first)) return first;
+    return last;  
+}
 
 template<class InputIterator, class T>
-typename iterator_traits<InputIterator>::difference_type count(InputIterator first, InputIterator last, const T& value);
+InputIterator find(InputIterator first, InputIterator last, const T& value) {
+    return find_if(first, last, [&value] (const T& other) { return value == other; } );
+}
+
 template<class InputIterator, class Predicate>
-typename iterator_traits<InputIterator>::difference_type count_if(InputIterator first, InputIterator last, Predicate pred);
+InputIterator find_if_not(InputIterator first, InputIterator last, Predicate pred) {
+    return find_if(first, last, [&pred] (const typename iterator_traits<InputIterator>::value_type& value) { return !pred(value); });
+}
+
+//ForwardIterator1, ForwardIterator2 are strictly forward iterators 
+template<class ForwardIterator1, class ForwardIterator2, class BinaryPredicate, 
+    typename enable_if< is_same<typename std::iterator_traits<ForwardIterator2>::iterator_category, forward_iterator_tag>::value
+                     || is_same<typename std::iterator_traits<ForwardIterator1>::iterator_category, forward_iterator_tag>::value
+        ,int>::type = 0>
+ForwardIterator1 find_end(ForwardIterator1 first1, ForwardIterator1 last1, ForwardIterator2 first2, ForwardIterator2 last2, BinaryPredicate pred) {
+    
+    //repeated searches
+    first1 = search(first1, last1, first2, last2, pred);
+    ForwardIterator1 match = last1;
+    
+    while (first1 != last1) {
+        match = first1;
+        first1 = search(++first1, last1, first2, last2, pred);
+    }
+        
+    return match;
+}
+
+//for all other iterators
+template<class Iterator1, class Iterator2, class BinaryPredicate, 
+    typename enable_if< !is_same<typename std::iterator_traits<Iterator2>::iterator_category, forward_iterator_tag>::value
+                     && !is_same<typename std::iterator_traits<Iterator1>::iterator_category, forward_iterator_tag>::value
+        ,int>::type = 0>
+Iterator1 find_end(Iterator1 first1, Iterator1 last1, Iterator2 first2, Iterator2 last2, BinaryPredicate pred) {
+    //search the string in reverse for the search string in reverse
+    typedef std::reverse_iterator<Iterator1> ReverseIterator1;
+    typedef std::reverse_iterator<Iterator2> ReverseIterator2;
+
+    ReverseIterator1 rfirst1(first1), rlast1(last1); 
+    ReverseIterator2 rfirst2(first2), rlast2(last2);
+    
+    ReverseIterator1 match = search(rlast1, rfirst1, rlast2, rfirst2, pred);
+
+    if (match != rfirst1) {
+        std::advance(match, std::distance(first2, last2));
+        return match.base();
+    } else {
+        return last1;
+    }
+}
+
+
+template<class ForwardIterator1, class ForwardIterator2>
+ForwardIterator1 find_end(ForwardIterator1 first1, ForwardIterator1 last1, ForwardIterator2 first2, ForwardIterator2 last2) {
+    return find_end(first1, last1, first2, last2, std::equal_to<typename iterator_traits<ForwardIterator1>::value_type>());
+}
+
+template<class InputIterator, class ForwardIterator, class BinaryPredicate>
+InputIterator find_first_of(InputIterator first1, InputIterator last1, ForwardIterator first2, ForwardIterator last2, BinaryPredicate pred) {
+    while(*first1 != *last1) {
+        for (auto it = first2; it != last2; ++it)
+            if (pred(*first1, *it)) return first1;
+        ++first1;
+    }
+    return last1;
+}
+
+template<class InputIterator, class ForwardIterator>
+InputIterator find_first_of(InputIterator first1, InputIterator last1, ForwardIterator first2, ForwardIterator last2) {
+    return find_first_of(first1, last1, first2, last2, std::equal_to<typename iterator_traits<ForwardIterator>::value_type>());
+}
+
+template<class ForwardIterator, class BinaryPredicate>
+ForwardIterator adjacent_find(ForwardIterator first, ForwardIterator last, BinaryPredicate pred) {
+    ForwardIterator previous;
+    while (first != last) {
+        previous = first++;
+        if (pred(*previous, *first)) return previous;
+    }
+    return last;
+}
+
+
+template<class ForwardIterator>
+ForwardIterator adjacent_find(ForwardIterator first, ForwardIterator last) {
+    return adjacent_find(first, last, std::equal_to<typename iterator_traits<ForwardIterator>::value_type>());
+}
+
+
+template<class InputIterator, class Predicate>
+typename iterator_traits<InputIterator>::difference_type count_if(InputIterator first, InputIterator last, Predicate pred) {
+    typename iterator_traits<InputIterator>::difference_type count = 0;
+    for_each(first, last, [&count] (const typename iterator_traits<InputIterator>::reference x) { if (pred(x)) ++count;});
+    return count;
+}
+
+template<class InputIterator, class T>
+typename iterator_traits<InputIterator>::difference_type count(InputIterator first, InputIterator last, const T& value) {
+    typename iterator_traits<InputIterator>::difference_type count = 0;
+    for_each(first, last, [&count,&value] (const T& x) { if (x == value) ++count;});
+    return count;
+}
 
 template<class InputIterator1, class InputIterator2>
 pair<InputIterator1, InputIterator2> mismatch(InputIterator1 first1, InputIterator1 last1, InputIterator2 first2);
@@ -89,14 +189,61 @@ template<class ForwardIterator1, class ForwardIterator2>
 bool is_permutation(ForwardIterator1 first1, ForwardIterator1 last1, ForwardIterator2 first2, ForwardIterator2 last2);
 template<class ForwardIterator1, class ForwardIterator2, class BinaryPredicate>
 bool is_permutation(ForwardIterator1 first1, ForwardIterator1 last1, ForwardIterator2 first2, ForwardIterator2 last2, BinaryPredicate pred);
-template<class ForwardIterator1, class ForwardIterator2>
-ForwardIterator1 search(ForwardIterator1 first1, ForwardIterator1 last1, ForwardIterator2 first2, ForwardIterator2 last2);
-template<class ForwardIterator1, class ForwardIterator2, class BinaryPredicate>
-ForwardIterator1 search(ForwardIterator1 first1, ForwardIterator1 last1, ForwardIterator2 first2, ForwardIterator2 last2, BinaryPredicate pred);
+
+template<class InputIterator, class ForwardIterator>
+InputIterator search(InputIterator first1, InputIterator last1, ForwardIterator first2, ForwardIterator last2) {
+    return search(first1, last1, first2, last2, std::equal_to<typename iterator_traits<ForwardIterator>::value_type>());
+}
+
+template<class ForwardIterator1, class ForwardIterator2, class BinaryPredicate, 
+    typename enable_if<is_same<typename std::iterator_traits<ForwardIterator2>::iterator_category, random_access_iterator_tag>::value, int>::type = 0>
+ForwardIterator1 search(ForwardIterator1 first1, ForwardIterator1 last1, ForwardIterator2 first2, ForwardIterator2 last2, BinaryPredicate pred) {
+    //Knuth–Morris–Pratt_algorithm O(m+n) with n length of the string we search in and m the length of the string we search with
+    //inspired by http://www.inf.fh-flensburg.de/lang/algorithmen/pattern/kmpen.htm
+
+    typedef typename iterator_traits<ForwardIterator1>::difference_type size_type_m;
+    
+    size_type_m m = std::distance(first2, last2);
+
+    //preprocessing
+    vector<size_type_m> table(m+1);
+    table[0]=-1;
+
+    size_type_m i=1, j=0;
+
+    table[0]=-1;
+    while (i<m) {
+        while ( j>=0 && !pred(*(first2+i), *(first2+j)) ) j=table[j]; //think *(first2+i) != *(first2+j)
+        i++; j++;
+        table[i]=j;
+    }
+
+    //searching    
+    ForwardIterator1 sequence_begin;
+    while (first1 != last1) {
+        if (j == 0) sequence_begin = first1;
+        while ( j>= 0 && !pred(*first1, *(first2+j)) ) j=table[j]; //think *first1 != *(first2+j)
+        ++first1; j++;
+        if (j == m) {
+            return sequence_begin;
+            //j=table[j];
+        }
+    }
+    
+    return last1;
+}
+
+//when the substring to search is not passed by random access iterator
+template<class ForwardIterator1, class ForwardIterator2, class BinaryPredicate,
+         typename enable_if<!is_same<typename std::iterator_traits<ForwardIterator2>::iterator_category, random_access_iterator_tag>::value, int>::type = 0>
+ForwardIterator1 search(ForwardIterator1 first, ForwardIterator1 last, ForwardIterator2 s_first, ForwardIterator2 s_last, BinaryPredicate pred) {
+    std::vector<typename ForwardIterator2::value_type> search_str(s_first, s_last);
+    return search(first, last, search_str.begin(), search_str.end(), pred);
+}
+
 template<class ForwardIterator, class Size, class T>
 ForwardIterator search_n(ForwardIterator first, ForwardIterator last, Size count, const T& value);
-template
-<class ForwardIterator, class Size, class T, class BinaryPredicate>
+template <class ForwardIterator, class Size, class T, class BinaryPredicate>
 ForwardIterator search_n(ForwardIterator first, ForwardIterator last, Size count, const T& value, BinaryPredicate pred);
 
 // 25.3, modifying sequence operations:
