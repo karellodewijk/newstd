@@ -11,7 +11,7 @@
 namespace std {
 
 template <class T, class Allocator = allocator<T> >
-class vector : Allocator {
+class vector : private Allocator {
 
     //just your algorithm min/max functions, this was easier than solving the circular dependency 
     template <class U> 

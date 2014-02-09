@@ -120,9 +120,6 @@ private:
     inline void _move_assign_allocator(list&& x, true_type) { *static_cast<_allocator_type*>(this) = move(x); }
     inline void _move_assign_allocator(list&& x, false_type) {}    
     
-    inline void _copy_assign_allocator(const list& x, true_type){ *static_cast<_allocator_type*>(this) = x; }
-    inline void _copy_assign_allocator(const list& x, false_type) {}
-
     inline void _swap_allocators(list& x, true_type) { std::swap(*static_cast<_allocator_type*>(this), *static_cast<allocator_type*>(&x)); }
     inline void _swap_allocators(list& x, false_type) {}
 
@@ -176,9 +173,21 @@ public:
 
     ~list() { clear(); }
 
+  private:   
+    inline void copy_assign(const list& x, true_type){ 
+        clear(); //must free memory as it may be tied to allocator
+        *static_cast<_allocator_type*>(this) = x;
+        for (auto it = x.begin(); it != x.end(); ++it) //append
+           emplace_back(*it);
+    }
+    
+    inline void copy_assign(const  list& x, false_type) {
+        assign(x.begin(), x.end()); 
+    }
+
   public:
     list<T,allocator_type>& operator=(const list<T,allocator_type>& x) noexcept {
-        _copy_assign_allocator(x, integral_constant<bool, allocator_traits<allocator_type>::propagate_on_container_copy_assignment::value>());
+        copy_assign(x, integral_constant<bool, allocator_traits<allocator_type>::propagate_on_container_copy_assignment::value>());
         assign(x.begin(), x.end());
         return *this;
     }
