@@ -5,30 +5,35 @@
 #include <functional>
 #include <cmath>
 #include <iterator>
+#include <initializer_list>
 
 namespace std {
 
-//implemented as a single node list with m_head as a dataless node
 
-template <class T, class Allocator = allocator<T> >
-class forward_list {
-
-private:
-    class Node_base {
+namespace details {
+    class Forward_list_node_base {
       public:
-        Node_base* m_next;
+        Forward_list_node_base* m_next;
     };
     
-    class Node : public Node_base {
+    template <class T>
+    class Forward_list_node : public Forward_list_node_base {
       public:
         template <class... Args>
-        Node(Node_base* next, Args&&... args) : Node_base{next}, m_value(std::forward<Args&&>(args)...) {}
+        Forward_list_node(Forward_list_node_base* next, Args&&... args) : Forward_list_node_base{next}, m_value(std::forward<Args&&>(args)...) {}
         T m_value;
     };
-    
-    typedef typename allocator_traits<Allocator>::template rebind_alloc<Node> Node_allocator_type;
-    
-    Node_allocator_type m_alloc;
+}
+
+
+template <class T, class Allocator = allocator<T> >
+class forward_list : private allocator_traits<Allocator>::template rebind_alloc<details::Forward_list_node<T>> {
+
+    //The allocator is a private base class of forward_list to abuse empty base class optimization
+    typedef typename allocator_traits<Allocator>::template rebind_alloc<details::Forward_list_node<T>> _allocator_type;
+
+    typedef details::Forward_list_node_base Node_base;
+    typedef details::Forward_list_node<T> Node;
     Node_base m_head;
 
     template <class U> //U is either T or const T depending on if this is a non-const or const iterator
@@ -88,20 +93,31 @@ public:
     typedef typename allocator_traits<Allocator>::const_pointer const_pointer;
 
 private:
+
     template <class... Args>  
     inline void _construct(Node* const & dest, Args&&... args) {
-         allocator_traits<Node_allocator_type>::construct(m_alloc, &*dest, std::forward<Args>(args)...);
+         allocator_traits<_allocator_type>::construct(*this, &*dest, std::forward<Args>(args)...);
     }
 
     inline void _destroy(Node* const & dest) {
-        allocator_traits<Node_allocator_type>::destroy(m_alloc, &*dest);
+        allocator_traits<_allocator_type>::destroy(*this, &*dest);
     }
+
+    inline void _move_assign_allocator(forward_list&& x, true_type) { *static_cast<_allocator_type*>(this) = move(x); }
+    inline void _move_assign_allocator(forward_list&& x, false_type) {}    
+    
+    inline void _copy_assign_allocator(const forward_list& x, true_type){ *static_cast<_allocator_type*>(this) = x; }
+    inline void _copy_assign_allocator(const forward_list& x, false_type) {}
+
+    inline void _swap_allocators(forward_list& x, true_type) { std::swap(*static_cast<_allocator_type*>(this), *static_cast<allocator_type*>(&x)); }
+    inline void _swap_allocators(forward_list& x, false_type) {}
+
 
 public:
 // 23.3.4.2, construct/copy/destroy:
     explicit forward_list() noexcept : m_head{nullptr} {}
 
-    explicit forward_list(const Allocator& alloc) : m_alloc(alloc), m_head{nullptr} {}
+    explicit forward_list(const Allocator& alloc) : _allocator_type(alloc), m_head{nullptr} {}
     
     explicit forward_list(size_type n) : forward_list(Allocator()) {
         for (size_type i = 0; i < n; ++i) 
@@ -122,8 +138,8 @@ public:
     
     forward_list(const forward_list& x, const Allocator& alloc) : forward_list(x.begin(), x.end(), alloc) {}
     forward_list(const forward_list& x) : forward_list(x, allocator_traits<allocator_type>::select_on_container_copy_construction(x.get_allocator())) {}    
-    forward_list(forward_list&& x, const Allocator& alloc) noexcept : m_alloc(alloc), m_head(x.m_head) { x.m_head.m_next = nullptr; } 
-    forward_list(forward_list&& x) noexcept : m_alloc(move(x.get_allocator())), m_head(x.m_head) { x.m_head.m_next = nullptr; } 
+    forward_list(forward_list&& x, const Allocator& alloc) noexcept : _allocator_type(alloc), m_head(x.m_head) { x.m_head.m_next = nullptr; } 
+    forward_list(forward_list&& x) noexcept : _allocator_type(move(x.get_allocator())), m_head(x.m_head) { x.m_head.m_next = nullptr; } 
     forward_list(initializer_list<T> x, const Allocator& alloc = Allocator()) : forward_list(x.begin(), x.end(), alloc) {}
     ~forward_list() { clear(); }
 
@@ -154,6 +170,7 @@ public:
     void assign(initializer_list<T> x) { assign(x.begin(), x.end()); }
     
     forward_list<T,Allocator>& operator=(const forward_list<T,Allocator>& x) noexcept { 
+        _copy_assign_allocator(x, integral_constant<bool, allocator_traits<allocator_type>::propagate_on_container_copy_assignment::value>());
         assign(x.begin(), x.end()); 
         return *this;
     }
@@ -165,12 +182,15 @@ public:
     
     forward_list<T,Allocator>& operator=(forward_list<T,Allocator>&& x) noexcept {
         clear();
+        
+        _move_assign_allocator(move(x), integral_constant<bool, allocator_traits<allocator_type>::propagate_on_container_move_assignment::value>());
+        
         m_head = x.m_head; 
         x.m_head.m_next = nullptr;
         return *this;
     }
     
-    allocator_type get_allocator() const noexcept { return m_alloc; }
+    allocator_type get_allocator() const noexcept { return *this; }
 
 // 23.3.4.3, iterators:
     iterator before_begin() noexcept { return iterator(&m_head); }
@@ -193,11 +213,11 @@ public:
     
 // 23.3.4.5, modifiers:
     template <class... Args> void emplace_front(Args&&... args) {
-        Node* node = m_alloc.allocate(1, m_head.m_next);
+        Node* node = this->allocate(1, m_head.m_next);
         try {
             _construct(node, m_head.m_next, std::forward<Args&&>(args)...);
         } catch(...) {
-            m_alloc.deallocate(node, 1);
+            this->deallocate(node, 1);
             throw;
         }
         m_head.m_next = node;
@@ -210,16 +230,16 @@ public:
         Node* node = static_cast<Node*>(m_head.m_next);
         m_head.m_next = node->m_next;
         _destroy(node);
-        m_alloc.deallocate(node, 1);
+        this->deallocate(node, 1);
     }
     
 // 23.3.4.1
     template <class... Args> iterator emplace_after(const_iterator position, Args&&... args) {
-        Node* node = m_alloc.allocate(1, position.m_node);
+        Node* node = this->allocate(1, position.m_node);
         try {
             _construct(node, position.m_node->m_next, std::forward<Args&&>(args)...);
         } catch(...) {
-            m_alloc.deallocate(node, 1);
+            this->deallocate(node, 1);
             throw;
         }
         position.m_node->m_next = node;
@@ -255,7 +275,7 @@ public:
             Node* current_node = static_cast<Node*>(position.m_node);
             ++position;
             _destroy(current_node);
-            m_alloc.deallocate(current_node, 1);
+            this->deallocate(current_node, 1);
         }
         return last;
     }
@@ -268,17 +288,11 @@ public:
         
         //free the node
         _destroy(node_to_erase);
-        m_alloc.deallocate(node_to_erase, 1);
+        this->deallocate(node_to_erase, 1);
         
         return iterator(position.m_node->m_next);
     }
-
-private:
-
-    inline void _swap_allocators(forward_list<T,Allocator>& x, true_type) { std::swap(m_alloc, x.m_alloc); }
-    inline void _swap_allocators(forward_list<T,Allocator>& x, false_type) {}
-
-public:    
+      
     void swap(forward_list<T,Allocator>& x) noexcept {
         _swap_allocators(x, integral_constant<bool, allocator_traits<allocator_type>::propagate_on_container_swap::value>());
         std::swap(m_head, x.m_head);
@@ -369,14 +383,14 @@ public:
         
     }  
 
-//    void debug() {
-//        std::cout << "head: address(" << &m_head<< ") next(" << m_head.m_next << ")" << std::endl;
-//        for (auto it = begin(); it != end(); ++it) {
-//            Node* node = static_cast<Node*>(it.m_node);
-//            std::cout << "node: value(" << node->m_value << ") address(" << node << ") next(" << node->m_next << ")" << std::endl;
-//        }
-//        std::cout << std::endl;
-//    }
+    void debug() {
+        std::cout << "head: address(" << &m_head<< ") next(" << m_head.m_next << ")" << std::endl;
+        for (auto it = begin(); it != end(); ++it) {
+            Node* node = static_cast<Node*>(it.m_node);
+            std::cout << "node: value(" << node->m_value << ") address(" << node << ") next(" << node->m_next << ")" << std::endl;
+        }
+        std::cout << std::endl;
+    }
 
     void remove(const T& value) {
         remove_if([&value] (const T& other) { return other == value; } );

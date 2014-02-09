@@ -11,7 +11,7 @@
 namespace std {
 
 template <class T, class Allocator = allocator<T> >
-class vector {
+class vector : Allocator {
 
     //just your algorithm min/max functions, this was easier than solving the circular dependency 
     template <class U> 
@@ -57,11 +57,10 @@ class vector {
     pointer m_begin;
     pointer m_end;
     pointer m_memory_end;
-    allocator_type m_alloc;
 
     template <class... Args>  
     inline void _construct(pointer const & dest, Args&&... args) {
-         allocator_traits<allocator_type>::construct(m_alloc, &*dest, std::forward<Args>(args)...);
+         allocator_traits<allocator_type>::construct(*this, &*dest, std::forward<Args>(args)...);
     }
 
     template <class V>
@@ -70,8 +69,17 @@ class vector {
     }
 
     inline void _destroy(pointer const & dest) {
-        allocator_traits<allocator_type>::destroy(m_alloc, &*dest);
+        allocator_traits<allocator_type>::destroy(*this, &*dest);
     }
+
+    inline void _move_assign_allocator(vector&& x, true_type) { *static_cast<allocator_type*>(this) = move(x); }
+    inline void _move_assign_allocator(vector&& x, false_type) {}    
+    
+    inline void _copy_assign_allocator(const vector& x, true_type){ *static_cast<allocator_type*>(this) = x; }
+    inline void _copy_assign_allocator(const vector& x, false_type) {}
+
+    inline void _swap_allocators(vector& x, true_type) { std::swap(*static_cast<allocator_type*>(this), *static_cast<allocator_type*>(&x)); }
+    inline void _swap_allocators(vector& x, false_type) {}
 
     //Either copy n x T from begin to dst or if that fails, destroy everything copied so far, deallocate dest and throw 
     void copy_or_cleanup(pointer const & dest, size_type alloc_size) {
@@ -82,14 +90,14 @@ class vector {
         } catch (...) {
             for (; i > 0; --i)
                 _destroy(dest+i-1);
-            m_alloc.deallocate(dest, alloc_size);
+            this->deallocate(dest, alloc_size);
             throw;
         }
         
         for (iterator it = m_begin; it != m_end ; ++it)
             _destroy(it);
 
-        m_alloc.deallocate(m_begin, capacity());
+        this->deallocate(m_begin, capacity());
         m_end = dest + size();
         m_begin = dest;
         m_memory_end = m_begin+alloc_size;
@@ -117,14 +125,14 @@ class vector {
         } catch (...) {
             for (; dst != dest; --dst)
                 _destroy(dst-1);
-            m_alloc.deallocate(dest, alloc_size);
+            this->deallocate(dest, alloc_size);
             throw;
         }
         
         for (iterator it = m_begin; it != m_end ; ++it)
             _destroy(it);
 
-        m_alloc.deallocate(m_begin, capacity());
+        this->deallocate(m_begin, capacity());
         m_end = dest + size();
         m_begin = dest;
         m_memory_end = m_begin + alloc_size;
@@ -140,7 +148,7 @@ class vector {
         } catch (...) {
             while (it != m_begin)
                 _destroy(--it);
-            m_alloc.deallocate(m_begin, m_memory_end - m_begin);
+            this->deallocate(m_begin, m_memory_end - m_begin);
             m_begin = m_end = m_memory_end = nullptr;
             throw;
         }
@@ -156,7 +164,7 @@ class vector {
         } catch (...) {
             while (it != m_begin)
                 _destroy(--it);
-            m_alloc.deallocate(m_begin, m_memory_end - m_begin);
+            this->deallocate(m_begin, m_memory_end - m_begin);
             m_begin = m_end = m_memory_end = nullptr;
             throw;
         }
@@ -169,17 +177,17 @@ public:
 // 23.3.6.2, _construct/copy/destroy:
     explicit vector() noexcept(is_nothrow_default_constructible<allocator_type>::value) : m_begin(nullptr), m_end(nullptr), m_memory_end(nullptr) {}
     
-    explicit vector(const Allocator& alloc) : m_begin(nullptr), m_end(nullptr), m_memory_end(nullptr), m_alloc(alloc) {}
+    explicit vector(const Allocator& alloc) : m_begin(nullptr), m_end(nullptr), m_memory_end(nullptr), allocator_type(alloc) {}
     
-    explicit vector(size_type n) : m_begin(m_alloc.allocate(n)), m_end(m_begin+n), m_memory_end(m_end) {
+    explicit vector(size_type n) : m_begin(this->allocate(n)), m_end(m_begin+n), m_memory_end(m_end) {
         construct_or_cleanup();
     }    
 
-    explicit vector(size_type n, const Allocator& alloc) : m_alloc(alloc), m_begin(m_alloc.allocate(n)), m_end(m_begin+n), m_memory_end(m_end) {
+    explicit vector(size_type n, const Allocator& alloc) : allocator_type(alloc), m_begin(this->allocate(n)), m_end(m_begin+n), m_memory_end(m_end) {
         construct_or_cleanup();
     }    
         
-    vector(size_type n, const T& value, const Allocator& alloc = Allocator()) : m_alloc(alloc), m_begin(m_alloc.allocate(n)), m_end(m_begin+n), m_memory_end(m_end) {
+    vector(size_type n, const T& value, const Allocator& alloc = Allocator()) : allocator_type(alloc), m_begin(this->allocate(n)), m_end(m_begin+n), m_memory_end(m_end) {
         construct_or_cleanup(value);
     }
 
@@ -193,8 +201,8 @@ public:
 private:
     template <class InputIterator>
     vector(size_type n, InputIterator first, InputIterator last, const Allocator& alloc = Allocator()) 
-        : m_alloc(alloc)
-        , m_begin(m_alloc.allocate(n))
+        : allocator_type(alloc)
+        , m_begin(this->allocate(n))
         , m_end(m_begin + n)
         , m_memory_end(m_end) 
     {
@@ -216,7 +224,7 @@ public:
         noexcept(is_nothrow_copy_constructible<pointer>::value
               && noexcept(x.m_begin = nullptr)) 
         
-        : m_alloc(alloc), m_begin(x.m_begin), m_end(x.m_end), m_memory_end(x.m_memory_end) 
+        : allocator_type(alloc), m_begin(x.m_begin), m_end(x.m_end), m_memory_end(x.m_memory_end) 
     {
         x.m_begin = nullptr;
         x.m_end = nullptr;
@@ -227,7 +235,7 @@ public:
         noexcept(is_nothrow_copy_constructible<pointer>::value
               && noexcept(x.m_begin = nullptr)) 
         
-        : m_alloc(std::move(x.get_allocator())), m_begin(x.m_begin), m_end(x.m_end), m_memory_end(x.m_memory_end) 
+        : allocator_type(std::move(x.get_allocator())), m_begin(x.m_begin), m_end(x.m_end), m_memory_end(x.m_memory_end) 
     {
         x.m_begin = nullptr;
         x.m_end = nullptr;
@@ -242,8 +250,8 @@ private:
     //with alloc propagate
     void copy_assign(const vector<T,Allocator>& x, true_type) {
         clear(); //we can not reuse the memory because it might be tied to the allocator we're overwriting
-        m_alloc = allocator_traits<allocator_type>::select_on_container_copy_construction(x.get_allocator());
-        m_alloc.allocate(m_begin, x.size());
+        _copy_assign_allocator(*this, x, true);
+        this->allocate(m_begin, x.size());
         m_memory_end = m_end = m_begin + x.size();
         construct_or_cleanup(x.begin(), x.end());
     }
@@ -260,12 +268,17 @@ public:
         return *this;
     }
 
-private:
-    void move_assign_impl(vector<T,Allocator>&& x)
+public:
+    
+    vector<T,Allocator>& operator=(vector<T,Allocator>&& x)
         noexcept( noexcept(m_begin = x.m_begin) 
                && noexcept(x.m_begin = nullptr)
-        )
+        )  
     {
+        clear();
+
+        _move_assign_allocator(move(x), integral_constant<bool, allocator_traits<allocator_type>::propagate_on_container_move_assignment::value>());
+        
         //steal data
         m_begin = x.m_begin;
         m_end = x.m_end;
@@ -274,34 +287,8 @@ private:
         //zero out other
         x.m_begin = nullptr;
         x.m_end = nullptr;
-        x.m_memory_end = nullptr;        
-    }
-
-    //with alloc propagate
-    void move_assign(vector<T,Allocator>&& x, true_type) 
-        noexcept( noexcept(m_alloc = move(x.get_allocator()))
-               && noexcept(move_assign_impl(move(x))) 
-        )
-    {
-        clear();
-        m_alloc = move(x.get_allocator());
-        move_assign_impl(move(x));
-    }
-
-    //without alloc propagate
-    void move_assign(vector<T,Allocator>&& x, false_type) 
-        noexcept( noexcept(move_assign_impl(move(x))) )
-    {
-        clear();
-        move_assign_impl(move(x));
-    }
-
-public:
-    
-    vector<T,Allocator>& operator=(vector<T,Allocator>&& x)
-        noexcept( noexcept( move_assign(move(x), integral_constant<bool, allocator_traits<allocator_type>::propagate_on_container_move_assignment::value>()) ) )  
-    {
-        move_assign(move(x), integral_constant<bool, allocator_traits<allocator_type>::propagate_on_container_move_assignment::value>());
+        x.m_memory_end = nullptr; 
+        
         return *this;     
     }
 
@@ -326,7 +313,7 @@ public:
         size_type n = std::distance(first, last);
         if (capacity() < n) {
             clear();
-            m_begin = m_alloc.allocate(n);
+            m_begin = this->allocate(n);
             m_memory_end = m_end = m_begin + n;
             construct_or_cleanup(first, last);
         } else {
@@ -347,7 +334,7 @@ public:
     void assign(size_type n, const T& u) {
         if (capacity() < n) {
             clear();
-            m_begin = m_alloc.allocate(n);
+            m_begin = this->allocate(n);
             m_memory_end = m_end = m_begin + n;
             construct_or_cleanup(u);
         } else {
@@ -368,7 +355,7 @@ public:
     
     void assign(initializer_list<T> x) { assign(x.begin(), x.end()); }
        
-    allocator_type get_allocator() const noexcept { return m_alloc; }
+    allocator_type get_allocator() const noexcept { return *this; }
 
 // iterators:
     iterator begin() noexcept { return m_begin; }
@@ -386,7 +373,7 @@ public:
     
 // 23.3.6.3, capacity:
     size_type size() const noexcept { return m_end - m_begin; }
-    size_type max_size() const noexcept { return allocator_traits<allocator_type>::max_size(m_alloc); }  
+    size_type max_size() const noexcept { return allocator_traits<allocator_type>::max_size(*this); }  
     
     void resize(size_type sz) {
         if (sz > size()) {
@@ -431,7 +418,7 @@ public:
         if (capacity() < n) {
             if (n > max_size())
                 throw length_error("Reserve size exceeds maximum capacity");
-            pointer tmp = m_alloc.allocate(n, m_memory_end);
+            pointer tmp = this->allocate(n, m_memory_end);
             copy_or_cleanup(tmp, n);
         }
     }
@@ -439,10 +426,10 @@ public:
     void shrink_to_fit() {
         if (m_end != m_memory_end) {
             if (size() != 0) {
-                pointer tmp = m_alloc.allocate(size(), m_begin);
+                pointer tmp = this->allocate(size(), m_begin);
                 copy_or_cleanup(tmp, size());
             } else {
-                m_alloc.deallocate(m_begin, capacity());
+                this->deallocate(m_begin, capacity());
                 m_begin = m_end = m_memory_end = nullptr;
             }
         }
@@ -494,7 +481,7 @@ public:
             size_type alloc_size = max(size_type(MIN_CAPACITY), size_type(std::round(size() * GROWTH_RATIO))); //largest of min_capacity or size()+n or size()*growth_ratio
             if (alloc_size > max_size())
                 throw length_error("Reserve size exceeds maximum capacity");
-            pointer tmp = m_alloc.allocate(alloc_size, m_memory_end);
+            pointer tmp = this->allocate(alloc_size, m_memory_end);
             size_type position_offset = position-m_begin;
             copy_or_cleanup_with_gap(tmp, alloc_size, position, 1);
             position = m_begin + position_offset;
@@ -550,7 +537,7 @@ public:
             size_type alloc_size = max(size_type(MIN_CAPACITY), size_type(std::round(size() * GROWTH_RATIO))); //largest of min_capacity or size()+n or size()*growth_ratio
             if (alloc_size > max_size())
                 throw length_error("Reserve size exceeds maximum capacity");
-            pointer tmp = m_alloc.allocate(alloc_size, m_memory_end);
+            pointer tmp = this->allocate(alloc_size, m_memory_end);
             size_type position_offset = position-m_begin;
             copy_or_cleanup_with_gap(tmp, alloc_size, position, 1);
             position = m_begin + position_offset;
@@ -614,7 +601,7 @@ public:
             size_type alloc_size = max(max(size() + n, size_type(MIN_CAPACITY)), size_type(std::round(size() * GROWTH_RATIO))); //largest of min_capacity or size()+n or size()*growth_ratio
             if (alloc_size > max_size())
                 throw length_error("Reserve size exceeds maximum capacity");
-            pointer tmp = m_alloc.allocate(alloc_size, m_memory_end);
+            pointer tmp = this->allocate(alloc_size, m_memory_end);
             size_type position_offset = position-m_begin;
             copy_or_cleanup_with_gap(tmp, alloc_size, position, n);
             position = m_begin + position_offset;
@@ -691,7 +678,7 @@ public:
             size_type alloc_size = max(max(size() + n, size_type(MIN_CAPACITY)), size_type(std::round(size() * GROWTH_RATIO))); //largest of min_capacity or size()+n or size()*growth_ratio
             if (alloc_size > max_size())
                 throw length_error("Reserve size exceeds maximum capacity");
-            pointer tmp = m_alloc.allocate(alloc_size, m_memory_end);
+            pointer tmp = this->allocate(alloc_size, m_memory_end);
             size_type position_offset = position-m_begin;
             copy_or_cleanup_with_gap(tmp, alloc_size, position, n);
             position = m_begin + position_offset;
@@ -782,11 +769,6 @@ public:
         return m_begin + (last-m_begin);
     }
 
-private:
-
-    inline void _swap_allocators(vector<T,Allocator>& x, true_type) noexcept { std::swap(m_alloc, x.m_alloc); }
-    inline void _swap_allocators(vector<T,Allocator>& x, false_type) noexcept {}
-
 public:
 
     
@@ -802,7 +784,7 @@ public:
     void clear() noexcept {
         for (auto it = m_begin; it != m_end; ++it)
             _destroy(it);
-        m_alloc.deallocate(m_begin, capacity());
+        this->deallocate(m_begin, capacity());
         m_begin = m_end = m_memory_end = nullptr;
     }
 };
